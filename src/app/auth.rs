@@ -11,7 +11,7 @@ use crate::{
 };
 use adw::prelude::*;
 use gtk::{Align, glib};
-use std::{fs, path::Path, rc::Rc};
+use std::{cell::Cell, fs, path::Path, rc::Rc};
 
 pub(in crate::app) fn show_auth_dialog(state: Rc<AppState>, account: Account) {
     let existing_panel = state.auth_panel.borrow().clone();
@@ -50,7 +50,7 @@ pub(in crate::app) fn show_auth_dialog(state: Rc<AppState>, account: Account) {
     root.append(&content);
 
     let status_label = gtk::Label::builder()
-        .label("点击生成认证链接，然后在浏览器完成 Microsoft 登录")
+        .label("正在生成认证链接")
         .halign(Align::Start)
         .wrap(true)
         .css_classes(["dim-label"])
@@ -62,7 +62,26 @@ pub(in crate::app) fn show_auth_dialog(state: Rc<AppState>, account: Account) {
         .hexpand(true)
         .placeholder_text("生成后这里会显示认证链接")
         .build();
-    content.append(&form_row("认证链接", &auth_url_entry));
+    let copy_auth_url_button = gtk::Button::builder()
+        .icon_name("edit-copy-symbolic")
+        .tooltip_text("复制认证链接")
+        .sensitive(false)
+        .build();
+    let auth_url_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .hexpand(true)
+        .build();
+    auth_url_box.append(&auth_url_entry);
+    auth_url_box.append(&copy_auth_url_button);
+    content.append(&form_widget_row("认证链接", &auth_url_box));
+    let copy_button_for_url = copy_auth_url_button.clone();
+    let copy_close_blocked = Rc::new(Cell::new(false));
+    let copy_close_blocked_for_url = Rc::clone(&copy_close_blocked);
+    auth_url_entry.connect_changed(move |entry| {
+        copy_button_for_url
+            .set_sensitive(!copy_close_blocked_for_url.get() && !entry.text().is_empty());
+    });
 
     let auth_response_entry = gtk::Entry::builder()
         .hexpand(true)
@@ -75,59 +94,48 @@ pub(in crate::app) fn show_auth_dialog(state: Rc<AppState>, account: Account) {
         .spacing(12)
         .halign(Align::End)
         .build();
-    let start_button = gtk::Button::with_label("生成认证链接");
     let finish_button = gtk::Button::with_label("提交回调");
     finish_button.add_css_class("suggested-action");
-    actions.append(&start_button);
     actions.append(&finish_button);
     content.append(&actions);
 
+    let close_blocked = copy_close_blocked;
     let panel = AuthPanel {
         account_id: account.id.clone(),
         window: dialog.clone(),
         status_label: status_label.clone(),
         auth_url_entry: auth_url_entry.clone(),
+        close_button: close_button.clone(),
+        copy_auth_url_button: copy_auth_url_button.clone(),
+        finish_button: finish_button.clone(),
+        close_blocked: Rc::clone(&close_blocked),
     };
     state.auth_panel.replace(Some(panel));
 
-    let start_state = Rc::clone(&state);
-    let start_account = account.clone();
-    let start_auth_url_entry = auth_url_entry.clone();
-    let start_auth_response_entry = auth_response_entry.clone();
-    let start_status_label = status_label.clone();
-    start_button.connect_clicked(move |_| {
-        if !Path::new(&start_account.config_dir).exists()
-            && let Err(error) = fs::create_dir_all(&start_account.config_dir)
-        {
-            show_toast(&start_state, &format!("无法创建配置目录: {error}"));
+    let copy_auth_url_entry = auth_url_entry.clone();
+    let copy_state = Rc::clone(&state);
+    copy_auth_url_button.connect_clicked(move |_| {
+        let url = copy_auth_url_entry.text();
+        if url.is_empty() {
+            show_toast(&copy_state, "认证链接尚未生成");
             return;
         }
-        if !begin_active_operation(
-            &start_state,
-            &start_account.id,
-            ActiveOperation::Authentication,
-        ) {
-            return;
+        if let Some(display) = gtk::gdk::Display::default() {
+            display.clipboard().set_text(&url);
+            show_toast(&copy_state, "认证链接已复制");
+        } else {
+            show_toast(&copy_state, "无法访问剪贴板");
         }
-
-        update_account_status(
-            &start_state,
-            &start_account.id,
-            AccountStatus::Authenticating,
-        );
-        start_auth_url_entry.set_text("");
-        start_auth_response_entry.set_text("");
-        start_status_label.set_label("正在生成认证链接");
-        start_authentication(
-            start_account.clone(),
-            onedrive_command(&start_state),
-            start_state.sender.clone(),
-        );
     });
 
     let finish_state = Rc::clone(&state);
     let finish_account = account.clone();
     let finish_auth_response_entry = auth_response_entry.clone();
+    let finish_status_label = status_label.clone();
+    let finish_close_button = close_button.clone();
+    let finish_copy_button = copy_auth_url_button.clone();
+    let finish_button_for_click = finish_button.clone();
+    let finish_close_blocked = Rc::clone(&close_blocked);
     finish_button.connect_clicked(move |_| {
         let response = finish_auth_response_entry.text().trim().to_string();
         if response.is_empty() {
@@ -136,24 +144,93 @@ pub(in crate::app) fn show_auth_dialog(state: Rc<AppState>, account: Account) {
         }
         let response_file = auth_response_path(&finish_account);
         match fs::write(response_file, response) {
-            Ok(()) => show_toast(&finish_state, "已提交认证回调"),
+            Ok(()) => {
+                finish_close_blocked.set(true);
+                finish_status_label.set_label("正在认证，请等待 Microsoft 返回结果");
+                finish_close_button.set_sensitive(false);
+                finish_copy_button.set_sensitive(false);
+                finish_button_for_click.set_sensitive(false);
+                finish_auth_response_entry.set_editable(false);
+                show_toast(&finish_state, "已提交认证回调");
+            }
             Err(error) => show_toast(&finish_state, &format!("写入认证回调失败: {error}")),
         }
     });
 
     let close_state = Rc::clone(&state);
     let close_account_id = account.id.clone();
+    let close_blocked_for_button = Rc::clone(&close_blocked);
     close_button.connect_clicked(move |_| {
+        if close_blocked_for_button.get() {
+            show_toast(&close_state, "正在认证，请等待完成");
+            return;
+        }
         close_auth_panel(&close_state, &close_account_id);
     });
 
     let request_close_state = Rc::clone(&state);
     let request_close_account_id = account.id.clone();
+    let request_close_blocked = Rc::clone(&close_blocked);
     dialog.connect_close_request(move |_| {
+        if request_close_blocked.get() {
+            show_toast(&request_close_state, "正在认证，请等待完成");
+            return glib::Propagation::Stop;
+        }
         close_auth_panel(&request_close_state, &request_close_account_id);
         glib::Propagation::Stop
     });
 
     dialog.set_content(Some(&root));
     dialog.present();
+    start_authentication_flow(
+        Rc::clone(&state),
+        account,
+        auth_url_entry,
+        auth_response_entry,
+        status_label,
+    );
+}
+
+fn start_authentication_flow(
+    state: Rc<AppState>,
+    account: Account,
+    auth_url_entry: gtk::Entry,
+    auth_response_entry: gtk::Entry,
+    status_label: gtk::Label,
+) {
+    if !Path::new(&account.config_dir).exists()
+        && let Err(error) = fs::create_dir_all(&account.config_dir)
+    {
+        show_toast(&state, &format!("无法创建配置目录: {error}"));
+        return;
+    }
+    if !begin_active_operation(&state, &account.id, ActiveOperation::Authentication) {
+        return;
+    }
+
+    update_account_status(&state, &account.id, AccountStatus::Authenticating);
+    auth_url_entry.set_text("");
+    auth_response_entry.set_text("");
+    status_label.set_label("正在生成认证链接");
+    start_authentication(
+        account.clone(),
+        onedrive_command(&state),
+        state.sender.clone(),
+    );
+}
+
+fn form_widget_row(label: &str, widget: &impl IsA<gtk::Widget>) -> gtk::Box {
+    let row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(12)
+        .build();
+    let title = gtk::Label::builder()
+        .label(label)
+        .halign(Align::Start)
+        .width_request(90)
+        .build();
+    row.append(&title);
+    row.append(widget);
+    widget.set_hexpand(true);
+    row
 }

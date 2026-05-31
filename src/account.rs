@@ -120,7 +120,7 @@ fn validate_unique(existing: &[Account], name: &str, sync_dir: &str) -> io::Resu
     if existing.iter().any(|account| account.name == name) {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
-            "profile name already exists",
+            "账户名称已存在",
         ));
     }
     let sync_dir = expand_home(sync_dir);

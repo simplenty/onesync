@@ -6,6 +6,7 @@ use crate::{
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
+    rc::Rc,
     sync::mpsc,
 };
 
@@ -56,6 +57,10 @@ pub(in crate::app) struct AuthPanel {
     pub(in crate::app) window: adw::Window,
     pub(in crate::app) status_label: gtk::Label,
     pub(in crate::app) auth_url_entry: gtk::Entry,
+    pub(in crate::app) close_button: gtk::Button,
+    pub(in crate::app) copy_auth_url_button: gtk::Button,
+    pub(in crate::app) finish_button: gtk::Button,
+    pub(in crate::app) close_blocked: Rc<Cell<bool>>,
 }
 
 #[derive(Clone, Copy)]
@@ -64,7 +69,6 @@ pub(in crate::app) enum ActiveOperation {
     Sync,
     StoppingSync,
     StoppingMonitor,
-    Logout,
 }
 
 impl ActiveOperation {
@@ -74,7 +78,6 @@ impl ActiveOperation {
             Self::Sync => "一次同步",
             Self::StoppingSync => "停止同步",
             Self::StoppingMonitor => "停止持续同步",
-            Self::Logout => "退出登录",
         }
     }
 }

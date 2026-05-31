@@ -129,13 +129,35 @@ pub fn start_sync(
     binary: String,
     sender: mpsc::Sender<BackendEvent>,
 ) -> io::Result<SyncHandle> {
+    start_sync_with_force(account, binary, sender, false)
+}
+
+pub fn start_forced_sync(
+    account: Account,
+    binary: String,
+    sender: mpsc::Sender<BackendEvent>,
+) -> io::Result<SyncHandle> {
+    start_sync_with_force(account, binary, sender, true)
+}
+
+fn start_sync_with_force(
+    account: Account,
+    binary: String,
+    sender: mpsc::Sender<BackendEvent>,
+    force: bool,
+) -> io::Result<SyncHandle> {
     ensure_transfer_metrics_enabled(&account.config_dir)?;
 
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .arg("--confdir")
         .arg(&account.config_dir)
         .arg("--sync")
-        .arg("--verbose")
+        .arg("--verbose");
+    if force {
+        command.arg("--force");
+    }
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -183,33 +205,6 @@ pub fn start_sync(
         child,
         stop_requested,
     })
-}
-
-pub fn start_logout(account: Account, binary: String, sender: mpsc::Sender<BackendEvent>) {
-    thread::spawn(move || {
-        let output = Command::new(&binary)
-            .arg("--confdir")
-            .arg(&account.config_dir)
-            .arg("--logout")
-            .output();
-        match output {
-            Ok(output) => {
-                let combined = combined_output(&output.stdout, &output.stderr);
-                let _ = sender.send(BackendEvent::LogoutFinished {
-                    account_id: account.id,
-                    success: output.status.success(),
-                    message: (!output.status.success()).then(|| parse_onedrive_error(&combined)),
-                });
-            }
-            Err(error) => {
-                let _ = sender.send(BackendEvent::LogoutFinished {
-                    account_id: account.id,
-                    success: false,
-                    message: Some(format!("无法启动 logout: {error}")),
-                });
-            }
-        }
-    });
 }
 
 pub fn start_monitor(
@@ -419,6 +414,12 @@ fn send_transfer_chunk(
             file,
         });
     }
+    if let Some(kind) = parse_confirmation(line) {
+        let _ = sender.send(BackendEvent::ConfirmationRequired {
+            account_id: account_id.to_string(),
+            kind,
+        });
+    }
 }
 
 #[cfg(test)]
@@ -480,6 +481,68 @@ mod tests {
             }
             other => panic!("expected SyncFinished, got {other:?}"),
         }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn forced_sync_passes_force_flag_to_onedrive() {
+        use crate::account::AccountStatus;
+        use std::{
+            env,
+            os::unix::fs::PermissionsExt,
+            sync::mpsc,
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        let root = env::temp_dir().join(format!(
+            "onesync-force-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let config_dir = root.join("profile");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config"), "sync_dir = \"~/OneDrive\"\n").unwrap();
+        let args_file = root.join("args");
+        let binary = root.join("fake-onedrive");
+        fs::write(
+            &binary,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n",
+                args_file.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&binary, permissions).unwrap();
+
+        let account = Account {
+            id: "force-sync".to_string(),
+            name: "Force Sync".to_string(),
+            email: String::new(),
+            config_dir: config_dir.to_string_lossy().to_string(),
+            sync_dir: "~/OneDrive".to_string(),
+            status: AccountStatus::Authenticated,
+        };
+        let (sender, receiver) = mpsc::channel();
+        let _handle =
+            start_forced_sync(account, binary.to_string_lossy().to_string(), sender).unwrap();
+        let event = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(matches!(
+            event,
+            BackendEvent::SyncFinished {
+                success: true,
+                requested_stop: false,
+                ..
+            }
+        ));
+
+        let args = fs::read_to_string(args_file).unwrap();
+        assert!(args.lines().any(|arg| arg == "--force"));
 
         fs::remove_dir_all(root).unwrap();
     }

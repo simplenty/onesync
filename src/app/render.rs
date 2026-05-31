@@ -1,20 +1,24 @@
 use super::{
     events::{active_operation, is_monitor_running, is_sync_running},
     layout::{ACCOUNT_CONTEXT_MENU_WIDTH, build_profile_context_popover},
+    open_sync_dir_for_account, start_monitor_for_account, start_one_time_sync_for_account,
     state::{ActiveOperation, AppState},
     status::{account_label, status_detail, status_label, status_title},
     widgets::set_command_button_content,
 };
 use crate::account::{Account, AccountStatus};
 use adw::prelude::*;
+use std::rc::Rc;
 
-pub(in crate::app) fn rebuild_profile_list(state: &AppState) {
+pub(in crate::app) fn rebuild_profile_list(state: &Rc<AppState>) {
     while let Some(child) = state.profile_list.first_child() {
         state.profile_list.remove(&child);
     }
 
-    for account in state.accounts.borrow().iter() {
-        state.profile_list.append(&build_profile_row(account));
+    for (index, account) in state.accounts.borrow().iter().enumerate() {
+        state
+            .profile_list
+            .append(&build_profile_row(Rc::clone(state), account, index));
     }
 
     if !state.accounts.borrow().is_empty() {
@@ -29,7 +33,11 @@ pub(in crate::app) fn rebuild_profile_list(state: &AppState) {
     }
 }
 
-pub(in crate::app) fn build_profile_row(account: &Account) -> gtk::ListBoxRow {
+pub(in crate::app) fn build_profile_row(
+    state: Rc<AppState>,
+    account: &Account,
+    index: usize,
+) -> gtk::ListBoxRow {
     let row = gtk::ListBoxRow::new();
     let action_row = adw::ActionRow::builder()
         .title(&account.name)
@@ -44,19 +52,49 @@ pub(in crate::app) fn build_profile_row(account: &Account) -> gtk::ListBoxRow {
     row.set_child(Some(&action_row));
 
     let account_menu = build_profile_context_popover();
-    account_menu.set_parent(&row);
+    account_menu.popover.set_parent(&row);
 
-    let menu_clone = account_menu.clone();
+    let sync_state = Rc::clone(&state);
+    let sync_account = account.clone();
+    let sync_popover = account_menu.popover.clone();
+    account_menu.sync_once_button.connect_clicked(move |_| {
+        sync_popover.popdown();
+        start_one_time_sync_for_account(Rc::clone(&sync_state), sync_account.clone());
+    });
+
+    let monitor_state = Rc::clone(&state);
+    let monitor_account = account.clone();
+    let monitor_popover = account_menu.popover.clone();
+    account_menu.monitor_button.connect_clicked(move |_| {
+        monitor_popover.popdown();
+        start_monitor_for_account(Rc::clone(&monitor_state), monitor_account.clone());
+    });
+
+    let open_state = Rc::clone(&state);
+    let open_account = account.clone();
+    let open_popover = account_menu.popover.clone();
+    account_menu.open_sync_dir_button.connect_clicked(move |_| {
+        open_popover.popdown();
+        open_sync_dir_for_account(&open_state, &open_account);
+    });
+
+    let menu_clone = account_menu.popover.clone();
     row.connect_destroy(move |_| {
         menu_clone.unparent();
     });
 
+    let click_state = Rc::clone(&state);
+    let click_row = row.clone();
+    let popover = account_menu.popover.clone();
     let click = gtk::GestureClick::builder().button(3).build();
     click.connect_pressed(move |_, _, x, y| {
+        click_state.selected_index.set(index);
+        click_state.profile_list.select_row(Some(&click_row));
+        refresh_content(&click_state);
         let click_bounds =
             gtk::gdk::Rectangle::new(x as i32, y as i32, ACCOUNT_CONTEXT_MENU_WIDTH, 1);
-        account_menu.set_pointing_to(Some(&click_bounds));
-        account_menu.popup();
+        popover.set_pointing_to(Some(&click_bounds));
+        popover.popup();
     });
     row.add_controller(click);
 

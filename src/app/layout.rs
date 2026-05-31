@@ -22,6 +22,13 @@ pub(in crate::app) struct ContentWidgets {
     pub(in crate::app) edit_button: gtk::Button,
 }
 
+pub(in crate::app) struct ProfileContextPopover {
+    pub(in crate::app) popover: gtk::Popover,
+    pub(in crate::app) sync_once_button: gtk::Button,
+    pub(in crate::app) monitor_button: gtk::Button,
+    pub(in crate::app) open_sync_dir_button: gtk::Button,
+}
+
 pub(in crate::app) fn build_sidebar(state: Rc<AppState>) -> adw::ToolbarView {
     let header = adw::HeaderBar::new();
     let add_button = gtk::Button::builder()
@@ -30,7 +37,7 @@ pub(in crate::app) fn build_sidebar(state: Rc<AppState>) -> adw::ToolbarView {
         .build();
     header.pack_end(&add_button);
 
-    let title = adw::WindowTitle::builder().title("Profiles").build();
+    let title = adw::WindowTitle::builder().title("账户").build();
     header.set_title_widget(Some(&title));
 
     let toolbar_view = adw::ToolbarView::new();
@@ -121,7 +128,7 @@ pub(in crate::app) fn build_content_widgets() -> (adw::ToolbarView, ContentWidge
         .build();
     let one_time_sync_button = command_button("view-refresh-symbolic", "一次同步");
     let monitor_button = command_button("media-playback-start-symbolic", "持续同步");
-    let edit_button = command_button("document-edit-symbolic", "编辑 Profile");
+    let edit_button = command_button("document-edit-symbolic", "编辑账户");
     actions.append(&one_time_sync_button);
     actions.append(&monitor_button);
 
@@ -132,7 +139,7 @@ pub(in crate::app) fn build_content_widgets() -> (adw::ToolbarView, ContentWidge
     account_menu_button.set_popover(Some(&build_account_actions_popover(&[(
         &edit_button,
         "document-edit-symbolic",
-        "编辑 Profile",
+        "编辑账户",
     )])));
     actions.append(&account_menu_button);
 
@@ -199,7 +206,7 @@ pub(in crate::app) fn build_account_actions_popover(
     popover
 }
 
-pub(in crate::app) fn build_profile_context_popover() -> gtk::Popover {
+pub(in crate::app) fn build_profile_context_popover() -> ProfileContextPopover {
     let popover = gtk::Popover::builder()
         .has_arrow(false)
         .position(gtk::PositionType::Bottom)
@@ -213,6 +220,7 @@ pub(in crate::app) fn build_profile_context_popover() -> gtk::Popover {
         .margin_end(6)
         .build();
 
+    let mut buttons = Vec::new();
     for (index, (icon_name, label)) in [
         ("view-refresh-symbolic", "同步一次"),
         ("media-playback-start-symbolic", "开始持续同步"),
@@ -226,13 +234,18 @@ pub(in crate::app) fn build_profile_context_popover() -> gtk::Popover {
         }
         let item = gtk::Button::builder()
             .halign(Align::Fill)
-            .sensitive(false)
             .css_classes(["flat"])
             .build();
         set_menu_button_content(&item, icon_name, label);
         content.append(&item);
+        buttons.push(item);
     }
 
     popover.set_child(Some(&content));
-    popover
+    ProfileContextPopover {
+        popover,
+        sync_once_button: buttons.remove(0),
+        monitor_button: buttons.remove(0),
+        open_sync_dir_button: buttons.remove(0),
+    }
 }

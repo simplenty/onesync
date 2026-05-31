@@ -1,81 +1,39 @@
-use super::state::AppState;
+use super::{start_forced_one_time_sync_for_account, state::AppState};
+use crate::account::Account;
 use adw::prelude::*;
-use gtk::Align;
 use std::rc::Rc;
 
-pub(in crate::app) fn show_confirmation<F>(
-    state: Rc<AppState>,
-    title: &str,
-    message: &str,
-    confirm_label: &str,
-    on_confirm: F,
-) where
-    F: Fn(Rc<AppState>) + 'static,
-{
-    let dialog = adw::Window::builder()
-        .title(title)
-        .transient_for(&state.window)
-        .modal(true)
-        .default_width(500)
-        .build();
-    let root = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .build();
-    let header = adw::HeaderBar::new();
-    let cancel_button = gtk::Button::with_label("取消");
-    let confirm_button = gtk::Button::with_label(confirm_label);
-    confirm_button.add_css_class("destructive-action");
-    header.pack_start(&cancel_button);
-    header.pack_end(&confirm_button);
-    root.append(&header);
-    let label = gtk::Label::builder()
-        .label(message)
-        .wrap(true)
-        .halign(Align::Start)
-        .margin_top(18)
-        .margin_bottom(18)
-        .margin_start(18)
-        .margin_end(18)
-        .build();
-    root.append(&label);
-
-    let cancel_dialog = dialog.clone();
-    cancel_button.connect_clicked(move |_| cancel_dialog.close());
-    let confirm_dialog = dialog.clone();
-    confirm_button.connect_clicked(move |_| {
-        on_confirm(Rc::clone(&state));
-        confirm_dialog.close();
-    });
-    dialog.set_content(Some(&root));
-    dialog.present();
+pub(in crate::app) fn show_warning_window(state: &AppState, title: &str, message: &str) {
+    let dialog = adw::AlertDialog::new(Some(title), Some(message));
+    dialog.add_response("close", "知道了");
+    dialog.set_default_response(Some("close"));
+    dialog.set_close_response("close");
+    dialog.present(Some(&state.window));
 }
 
-pub(in crate::app) fn show_warning_window(state: &AppState, title: &str, message: &str) {
-    let dialog = adw::Window::builder()
-        .title(title)
-        .transient_for(&state.window)
-        .modal(true)
-        .default_width(560)
-        .build();
-    let root = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .build();
-    let header = adw::HeaderBar::new();
-    let close_button = gtk::Button::with_label("知道了");
-    header.pack_end(&close_button);
-    root.append(&header);
-    let label = gtk::Label::builder()
-        .label(message)
-        .wrap(true)
-        .halign(Align::Start)
-        .margin_top(18)
-        .margin_bottom(18)
-        .margin_start(18)
-        .margin_end(18)
-        .build();
-    root.append(&label);
-    let close_dialog = dialog.clone();
-    close_button.connect_clicked(move |_| close_dialog.close());
-    dialog.set_content(Some(&root));
-    dialog.present();
+pub(in crate::app) fn show_big_delete_confirmation(state: Rc<AppState>, account: Account) {
+    let dialog = adw::AlertDialog::new(
+        Some("允许大量删除?"),
+        Some(
+            "onedrive 检测到大量删除。只有在你确认这些删除是预期操作时，才允许继续。\n\n继续后，OneSync 会用 --force 重新运行一次同步，并把本地删除同步到 OneDrive 云端。",
+        ),
+    );
+    dialog.add_responses(&[("cancel", "返回"), ("force", "允许大量删除并重新同步")]);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+    dialog.set_response_appearance("force", adw::ResponseAppearance::Destructive);
+    let force_state = Rc::clone(&state);
+    let force_account = account.clone();
+    dialog.choose(
+        Some(&state.window),
+        None::<&gtk::gio::Cancellable>,
+        move |response| {
+            if response == "force" {
+                start_forced_one_time_sync_for_account(
+                    Rc::clone(&force_state),
+                    force_account.clone(),
+                );
+            }
+        },
+    );
 }

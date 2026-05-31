@@ -30,13 +30,13 @@ pub(super) fn parse_onedrive_error(output: &str) -> String {
     {
         "网络连接失败，请检查网络或代理后重试".to_string()
     } else if lower.contains("unknown key") || lower.contains("unknown config") {
-        "配置文件包含 onedrive 不支持的选项，请编辑 profile 配置".to_string()
+        "配置文件包含 onedrive 不支持的选项，请编辑账户配置".to_string()
     } else if lower.contains("failed") && (lower.contains("upload") || lower.contains("download")) {
         "部分上传或下载失败，请查看传输列表和 onedrive 输出".to_string()
     } else if lower.contains("segmentation fault") || lower.contains("core dumped") {
-        "onedrive CLI 崩溃，请升级 CLI 或检查该 profile 配置".to_string()
+        "onedrive CLI 崩溃，请升级 CLI 或检查该账户配置".to_string()
     } else if lower.contains("auth") || lower.contains("unauthorized") {
-        "认证失败，请重新完成该 profile 登录".to_string()
+        "认证失败，请重新完成该账户登录".to_string()
     } else {
         output
             .lines()
@@ -62,7 +62,7 @@ pub(super) fn parse_confirmation(output: &str) -> Option<ConfirmationKind> {
     let lower = output.to_ascii_lowercase();
     if lower.contains("--resync") && lower.contains("required") {
         Some(ConfirmationKind::ResyncRequired)
-    } else if lower.contains("big delete") || lower.contains("large delete") {
+    } else if is_big_delete_confirmation(&lower) {
         Some(ConfirmationKind::BigDelete)
     } else if lower.contains("download-only") && lower.contains("cleanup") {
         Some(ConfirmationKind::DownloadOnlyCleanup)
@@ -71,6 +71,14 @@ pub(super) fn parse_confirmation(output: &str) -> Option<ConfirmationKind> {
     } else {
         None
     }
+}
+
+fn is_big_delete_confirmation(lower: &str) -> bool {
+    lower.contains("big delete detected")
+        || lower.contains("attempt to remove a large volume of data from onedrive")
+        || (lower.contains("to delete a large volume of data")
+            && lower.contains("--force")
+            && lower.contains("classify_as_big_delete"))
 }
 
 #[cfg(test)]
@@ -101,7 +109,7 @@ mod tests {
         );
         assert_eq!(
             parse_onedrive_error("unknown config key: verbose"),
-            "配置文件包含 onedrive 不支持的选项，请编辑 profile 配置"
+            "配置文件包含 onedrive 不支持的选项，请编辑账户配置"
         );
     }
 
@@ -125,6 +133,12 @@ mod tests {
             Some(ConfirmationKind::BigDelete)
         ));
         assert!(matches!(
+            parse_confirmation(
+                "ERROR: To delete a large volume of data use --force or increase the config value 'classify_as_big_delete' to a larger value"
+            ),
+            Some(ConfirmationKind::BigDelete)
+        ));
+        assert!(matches!(
             parse_confirmation("download-only cleanup warning"),
             Some(ConfirmationKind::DownloadOnlyCleanup)
         ));
@@ -132,5 +146,19 @@ mod tests {
             parse_confirmation("upload-only cannot be used with no-remote-delete"),
             Some(ConfirmationKind::UploadOnlyNoRemoteDelete)
         ));
+    }
+
+    #[test]
+    fn avoids_false_big_delete_confirmation_matches() {
+        assert!(
+            parse_confirmation("Deleting item from Microsoft OneDrive: /Documents/old.txt")
+                .is_none()
+        );
+        assert!(
+            parse_confirmation("delete failed after retry; rerun with --force only if requested")
+                .is_none()
+        );
+        assert!(parse_confirmation("large delete batch finished successfully").is_none());
+        assert!(parse_confirmation("classify_as_big_delete = 1000").is_none());
     }
 }

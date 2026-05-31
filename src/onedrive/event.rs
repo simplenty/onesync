@@ -50,6 +50,12 @@ pub enum BackendEvent {
         success: bool,
         message: Option<String>,
     },
+    AccountIdentityFound {
+        account_id: String,
+        display_name: Option<String>,
+        email: Option<String>,
+        message: Option<String>,
+    },
     SyncFinished {
         account_id: String,
         success: bool,
@@ -58,14 +64,13 @@ pub enum BackendEvent {
         message: Option<String>,
         requires_confirmation: Option<ConfirmationKind>,
     },
-    LogoutFinished {
-        account_id: String,
-        success: bool,
-        message: Option<String>,
-    },
     TransferEvent {
         account_id: String,
         file: SyncFile,
+    },
+    ConfirmationRequired {
+        account_id: String,
+        kind: ConfirmationKind,
     },
     MonitorStopped {
         account_id: String,
@@ -90,7 +95,7 @@ impl ConfirmationKind {
     pub fn user_message(self) -> &'static str {
         match self {
             Self::ResyncRequired => {
-                "onedrive 要求执行 --resync。请确认该 profile 的本地与远端状态后再手动处理。"
+                "onedrive 要求执行 --resync。请确认该账户的本地与远端状态后再手动处理。"
             }
             Self::BigDelete => "onedrive 检测到大量删除，需要授权。请先检查删除列表后再继续。",
             Self::DownloadOnlyCleanup => "download-only 清理可能删除本地文件。请确认配置后再继续。",
