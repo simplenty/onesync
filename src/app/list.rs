@@ -22,14 +22,14 @@ struct TransferRow {
     completed: Cell<bool>,
 }
 
-pub struct TransferList {
+pub(super) struct TransferList {
     list: gtk::ListBox,
     rows: RefCell<HashMap<String, TransferRow>>,
     next_order: Cell<u64>,
 }
 
 impl TransferList {
-    pub fn new(list: gtk::ListBox) -> Self {
+    pub(super) fn new(list: gtk::ListBox) -> Self {
         Self {
             list,
             rows: RefCell::new(HashMap::new()),
@@ -37,7 +37,7 @@ impl TransferList {
         }
     }
 
-    pub fn clear(&self) {
+    pub(super) fn clear(&self) {
         while let Some(child) = self.list.first_child() {
             self.list.remove(&child);
         }
@@ -45,7 +45,7 @@ impl TransferList {
         self.next_order.set(0);
     }
 
-    pub fn upsert(&self, file: SyncFile) {
+    pub(super) fn upsert(&self, file: SyncFile) {
         let completed = file.is_complete();
         if let Some(row) = self.rows.borrow().get(&file.name).cloned() {
             let progress = if file.is_failed() {
@@ -90,37 +90,6 @@ impl TransferList {
             self.list.append(&row.list_row);
         }
     }
-}
-
-pub fn form_row(label: &str, entry: &gtk::Entry) -> gtk::Box {
-    let row = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
-        .build();
-    let title = gtk::Label::builder()
-        .label(label)
-        .halign(Align::Start)
-        .width_request(90)
-        .build();
-    row.append(&title);
-    row.append(entry);
-    entry.set_hexpand(true);
-    row
-}
-
-pub fn command_button(icon_name: &str, label: &str) -> gtk::Button {
-    let button = gtk::Button::new();
-    set_command_button_content(&button, icon_name, label);
-    button
-}
-
-pub fn set_command_button_content(button: &gtk::Button, icon_name: &str, label: &str) {
-    let content = adw::ButtonContent::builder()
-        .icon_name(icon_name)
-        .label(label)
-        .build();
-
-    button.set_child(Some(&content));
 }
 
 fn build_file_row(file: SyncFile) -> (gtk::ListBoxRow, TransferRow) {

@@ -18,7 +18,7 @@ pub fn expand_home(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
-pub fn home_dir() -> PathBuf {
+fn home_dir() -> PathBuf {
     env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
@@ -27,6 +27,6 @@ pub fn home_dir() -> PathBuf {
 pub fn unix_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
+        .map(|d| d.as_secs())
         .unwrap_or(0)
 }

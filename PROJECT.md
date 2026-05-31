@@ -5,20 +5,19 @@
 ## 运行入口
 
 - `src/main.rs`：声明应用模块并调用 `app::run()`。
-- `src/app.rs`：GTK/libadwaita 桌面应用入口，负责窗口装配、状态持有、用户动作连接、后端事件分发和对话框流程。
+- `src/app/mod.rs`：GTK/libadwaita 桌面应用入口，负责启动、装配和顶层 action 连接。
 
 应用 ID 是 `io.github.onesync.Demo`，窗口标题是 `OneSync`，默认尺寸为 `1080x720`，最小尺寸为 `860x560`。
 
 ## 模块职责
 
 - `account`：管理 OneSync profile 元数据，包括账号列表读写、新建 profile、认证文件路径和认证状态。
-- `app`：协调 UI、账号状态、同步/监控进程、认证对话框、删除/退出确认和 toast 提示。
+- `app`：GTK/libadwaita 应用层，包含状态、事件处理、布局、渲染、认证窗口、profile 管理窗口、确认窗口、通用 widget helper 和传输列表视图。
 - `config`：解析、修改和写回 onedrive CLI 配置文件，保留注释、空行和未知行；写入前自动备份旧配置。
-- `onedrive`：封装 onedrive CLI 调用，包括版本检测、认证、一次同步、持续同步、退出登录、进程停止和输出解析。
-- `path`：集中处理配置根目录、home 目录展开和时间戳，避免账号与设置模块重复实现路径逻辑。
-- `settings`：读取 GUI 设置，当前支持启动最小化、无边框窗口和自定义 onedrive CLI 路径。
+- `onedrive`：封装 onedrive CLI 调用，包括版本检测、认证、一次同步、持续同步、退出登录、进程停止和 CLI 输出解释。
+- `settings`：读取 GUI 设置，当前支持自定义 onedrive CLI 路径。
 - `transfer`：解析 onedrive 输出中的传输行，生成可供 UI 展示的 `SyncFile`。
-- `ui`：可复用 GTK 小组件和传输列表组件，包括表单行、命令按钮和传输进度列表。
+- `utils`：集中处理配置根目录、home 目录展开和时间戳，避免账号与设置模块重复实现路径逻辑。
 
 ## UI 组件
 
@@ -153,10 +152,10 @@ cargo fmt --all -- --check
 cargo test
 ```
 
-## 重构后的边界
+## 架构边界
 
-- 传输解析从 `transfer_parser.rs` 改为单词模块 `transfer.rs`。
-- 路径和时间戳通用逻辑集中到 `path.rs`。
-- 传输列表的 UI 状态、排序和动画封装到 `ui::TransferList`，`app.rs` 不再直接管理传输行集合。
-- UI 模块使用单文件 `src/ui.rs`，当前不保留没有子模块的 `src/ui/mod.rs`。
-- 当前仍可继续拆分的最大文件是 `app.rs`；后续适合按 `dialog`、`profile`、`event`、`content` 等单词模块拆出，但需要同步调整 GTK 回调可见性。
+- GTK/libadwaita 代码只放在 `src/app/`。
+- 根层领域模块不依赖 GTK/libadwaita。
+- `app` 调用 `account`、`config`、`settings`、`onedrive`、`transfer` 和 `utils`。
+- `onedrive` 是 CLI adapter，内部拆分为事件类型、输出解析和进程管理。
+- `transfer` 只负责把 onedrive 传输输出解析成结构化进度。

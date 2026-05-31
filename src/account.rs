@@ -1,6 +1,6 @@
 use crate::{
     config::{ConfigEdit, OneDriveConfig},
-    path::{config_root, expand_home, unix_timestamp},
+    utils::{config_root, expand_home, unix_timestamp},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -98,14 +98,14 @@ pub fn auth_response_path(account: &Account) -> PathBuf {
     Path::new(&account.config_dir).join("auth-response")
 }
 
-pub fn default_account_name() -> String {
+pub fn suggested_account_name() -> String {
     let count = load_store()
         .map(|store| store.accounts.len() + 1)
         .unwrap_or(1);
     format!("OneDrive {count}")
 }
 
-pub fn default_sync_dir() -> String {
+pub fn suggested_sync_dir() -> String {
     let count = load_store()
         .map(|store| store.accounts.len() + 1)
         .unwrap_or(1);
@@ -161,6 +161,10 @@ fn sanitize_id(value: &str) -> String {
     }
 }
 
+pub fn remove_confirmation_matches(expected_name: &str, input: &str) -> bool {
+    input == expected_name
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +208,13 @@ mod tests {
         assert_eq!(store.accounts.len(), 1);
         assert_eq!(store.accounts[0].id, "personal");
         assert_eq!(store.accounts[0].status, AccountStatus::Authenticated);
+    }
+
+    #[test]
+    fn remove_profile_requires_exact_current_name() {
+        assert!(remove_confirmation_matches("Work Drive", "Work Drive"));
+        assert!(!remove_confirmation_matches("Work Drive", "work drive"));
+        assert!(!remove_confirmation_matches("Work Drive", " Work Drive "));
+        assert!(!remove_confirmation_matches("Work Drive", "Personal"));
     }
 }

@@ -1,10 +1,10 @@
-use crate::path::config_root;
-use std::{fs, io, path::PathBuf};
+use crate::utils::config_root;
+use std::{fs, io};
 
-const DEFAULT_ONEDRIVE_COMMAND: &str = "onedrive";
+pub const DEFAULT_ONEDRIVE_COMMAND: &str = "onedrive";
 
 pub fn load_onedrive_command() -> io::Result<String> {
-    let path = settings_path();
+    let path = config_root().join("settings.json");
     if !path.exists() {
         return Ok(DEFAULT_ONEDRIVE_COMMAND.to_string());
     }
@@ -18,8 +18,4 @@ pub fn load_onedrive_command() -> io::Result<String> {
         .filter(|binary| !binary.is_empty())
         .unwrap_or(DEFAULT_ONEDRIVE_COMMAND)
         .to_string())
-}
-
-fn settings_path() -> PathBuf {
-    config_root().join("settings.json")
 }

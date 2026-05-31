@@ -1,7 +1,7 @@
+use crate::utils::unix_timestamp;
 use std::{
     fs, io,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -159,33 +159,18 @@ impl OneDriveConfig {
     }
 
     fn set_values(&mut self, key: &str, values: &[String], multiline: bool) {
-        let mut replaced = false;
         self.lines.retain(
             |line| !matches!(line, ConfigLine::Pair { key: line_key, .. } if line_key == key),
         );
-        for line in &mut self.lines {
-            if let ConfigLine::Pair {
-                key: line_key,
-                values: line_values,
-            } = line
-                && line_key == key
-            {
-                *line_values = values.to_vec();
-                replaced = true;
-                break;
-            }
-        }
-        if !replaced {
-            let stored = if multiline {
-                values.to_vec()
-            } else {
-                values.first().cloned().into_iter().collect()
-            };
-            self.lines.push(ConfigLine::Pair {
-                key: key.to_string(),
-                values: stored,
-            });
-        }
+        let stored = if multiline {
+            values.to_vec()
+        } else {
+            values.first().cloned().into_iter().collect()
+        };
+        self.lines.push(ConfigLine::Pair {
+            key: key.to_string(),
+            values: stored,
+        });
     }
 
     fn remove_key(&mut self, key: &str) {
@@ -230,11 +215,7 @@ pub fn ensure_transfer_metrics_enabled(config_dir: impl AsRef<Path>) -> io::Resu
 }
 
 fn backup_path(path: &Path) -> PathBuf {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    path.with_extension(format!("bak-{timestamp}"))
+    path.with_extension(format!("bak-{}", unix_timestamp()))
 }
 
 fn unquote(value: &str) -> &str {

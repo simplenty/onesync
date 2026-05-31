@@ -1,7 +1,13 @@
+use super::{
+    event::{BackendEvent, ClientCheck, Version},
+    output::{
+        combined_output, is_auth_required, parse_confirmation, parse_onedrive_error, parse_version,
+    },
+};
 use crate::{
     account::{Account, auth_response_path, auth_url_path, is_authenticated},
     config::ensure_transfer_metrics_enabled,
-    transfer::{SyncFile, parse_transfer_line},
+    transfer::parse_transfer_line,
 };
 use std::{
     fs,
@@ -16,112 +22,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const MIN_ONEDRIVE_VERSION: Version = Version {
+const MIN_ONEDRIVE_VERSION: Version = Version {
     major: 2,
     minor: 5,
     patch: 0,
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Version {
-    pub major: u64,
-    pub minor: u64,
-    pub patch: u64,
-}
-
-#[derive(Debug, Clone)]
-pub enum ClientCheck {
-    Unknown,
-    Ready(Version),
-    Missing(String),
-    Unsupported { found: Version, minimum: Version },
-}
-
-impl ClientCheck {
-    #[must_use]
-    pub fn is_ready(&self) -> bool {
-        matches!(self, Self::Ready(_))
-    }
-
-    #[must_use]
-    pub fn message(&self) -> String {
-        match self {
-            Self::Unknown => "正在检测 onedrive CLI".to_string(),
-            Self::Ready(version) => format!(
-                "onedrive CLI {}.{}.{} 可用",
-                version.major, version.minor, version.patch
-            ),
-            Self::Missing(error) => format!("未找到 onedrive CLI: {error}"),
-            Self::Unsupported { found, minimum } => format!(
-                "onedrive CLI 版本过低: 当前 {}.{}.{}, 需要 >= {}.{}.{}",
-                found.major, found.minor, found.patch, minimum.major, minimum.minor, minimum.patch
-            ),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum BackendEvent {
-    ClientChecked(ClientCheck),
-    AuthUrl {
-        account_id: String,
-        url: String,
-    },
-    AuthFinished {
-        account_id: String,
-        success: bool,
-        message: Option<String>,
-    },
-    SyncFinished {
-        account_id: String,
-        success: bool,
-        requested_stop: bool,
-        auth_required: bool,
-        message: Option<String>,
-        requires_confirmation: Option<ConfirmationKind>,
-    },
-    LogoutFinished {
-        account_id: String,
-        success: bool,
-        message: Option<String>,
-    },
-    TransferEvent {
-        account_id: String,
-        file: SyncFile,
-    },
-    MonitorStopped {
-        account_id: String,
-        success: bool,
-        requested_stop: bool,
-        auth_required: bool,
-        message: Option<String>,
-        requires_confirmation: Option<ConfirmationKind>,
-    },
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum ConfirmationKind {
-    ResyncRequired,
-    BigDelete,
-    DownloadOnlyCleanup,
-    UploadOnlyNoRemoteDelete,
-}
-
-impl ConfirmationKind {
-    #[must_use]
-    pub fn user_message(self) -> &'static str {
-        match self {
-            Self::ResyncRequired => {
-                "onedrive 要求执行 --resync。请确认该 profile 的本地与远端状态后再手动处理。"
-            }
-            Self::BigDelete => "onedrive 检测到大量删除，需要授权。请先检查删除列表后再继续。",
-            Self::DownloadOnlyCleanup => "download-only 清理可能删除本地文件。请确认配置后再继续。",
-            Self::UploadOnlyNoRemoteDelete => {
-                "upload-only 与 no-remote-delete 组合需要显式确认兼容性。"
-            }
-        }
-    }
-}
 
 #[derive(Clone)]
 pub struct SyncHandle {
@@ -516,119 +421,9 @@ fn send_transfer_chunk(
     }
 }
 
-fn parse_version(output: &str) -> Option<Version> {
-    let (_, version) = output.split_once("onedrive")?;
-    let mut parts = version
-        .split(|character: char| !character.is_ascii_digit() && character != '.')
-        .find(|part| part.chars().any(|character| character.is_ascii_digit()))?
-        .split('.');
-    Some(Version {
-        major: parts.next()?.parse().ok()?,
-        minor: parts.next().unwrap_or("0").parse().ok()?,
-        patch: parts.next().unwrap_or("0").parse().ok()?,
-    })
-}
-
-fn combined_output(stdout: &[u8], stderr: &[u8]) -> String {
-    let mut combined = String::from_utf8_lossy(stdout).to_string();
-    combined.push_str(&String::from_utf8_lossy(stderr));
-    combined
-}
-
-fn parse_onedrive_error(output: &str) -> String {
-    let lower = output.to_ascii_lowercase();
-    if is_auth_required(output) {
-        "认证已过期或缺少 refresh_token，请重新完成登录".to_string()
-    } else if lower.contains("could not resolve")
-        || lower.contains("connection")
-        || lower.contains("network")
-        || lower.contains("timeout")
-    {
-        "网络连接失败，请检查网络或代理后重试".to_string()
-    } else if lower.contains("unknown key") || lower.contains("unknown config") {
-        "配置文件包含 onedrive 不支持的选项，请编辑 profile 配置".to_string()
-    } else if lower.contains("failed") && (lower.contains("upload") || lower.contains("download")) {
-        "部分上传或下载失败，请查看传输列表和 onedrive 输出".to_string()
-    } else if lower.contains("segmentation fault") || lower.contains("core dumped") {
-        "onedrive CLI 崩溃，请升级 CLI 或检查该 profile 配置".to_string()
-    } else if lower.contains("auth") || lower.contains("unauthorized") {
-        "认证失败，请重新完成该 profile 登录".to_string()
-    } else {
-        output
-            .lines()
-            .rev()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("onedrive 操作失败")
-            .trim()
-            .to_string()
-    }
-}
-
-fn is_auth_required(output: &str) -> bool {
-    let lower = output.to_ascii_lowercase();
-    lower.contains("login required")
-        || lower.contains("authorise this application")
-        || lower.contains("authorize this application")
-        || lower.contains("refresh_token is invalid")
-        || lower.contains("refresh token is invalid")
-        || lower.contains("reauth")
-}
-
-fn parse_confirmation(output: &str) -> Option<ConfirmationKind> {
-    let lower = output.to_ascii_lowercase();
-    if lower.contains("--resync") && lower.contains("required") {
-        Some(ConfirmationKind::ResyncRequired)
-    } else if lower.contains("big delete") || lower.contains("large delete") {
-        Some(ConfirmationKind::BigDelete)
-    } else if lower.contains("download-only") && lower.contains("cleanup") {
-        Some(ConfirmationKind::DownloadOnlyCleanup)
-    } else if lower.contains("upload-only") && lower.contains("no-remote-delete") {
-        Some(ConfirmationKind::UploadOnlyNoRemoteDelete)
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parses_version_from_cli_output() {
-        assert_eq!(
-            parse_version("onedrive v2.5.4-1+np1").unwrap(),
-            Version {
-                major: 2,
-                minor: 5,
-                patch: 4
-            }
-        );
-    }
-
-    #[test]
-    fn maps_known_error_output_to_actionable_messages() {
-        assert_eq!(
-            parse_onedrive_error("ERROR: refresh_token is invalid"),
-            "认证已过期或缺少 refresh_token，请重新完成登录"
-        );
-        assert_eq!(
-            parse_onedrive_error("curl timeout while connecting"),
-            "网络连接失败，请检查网络或代理后重试"
-        );
-        assert_eq!(
-            parse_onedrive_error("unknown config key: verbose"),
-            "配置文件包含 onedrive 不支持的选项，请编辑 profile 配置"
-        );
-    }
-
-    #[test]
-    fn detects_login_required_output() {
-        assert!(is_auth_required("ERROR: Login required"));
-        assert!(is_auth_required(
-            "To authorise this application open the URL"
-        ));
-        assert!(is_auth_required("ERROR: refresh_token is invalid"));
-    }
 
     #[cfg(unix)]
     #[test]
@@ -687,25 +482,5 @@ mod tests {
         }
 
         fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn detects_confirmation_required_states() {
-        assert!(matches!(
-            parse_confirmation("--resync is required to continue"),
-            Some(ConfirmationKind::ResyncRequired)
-        ));
-        assert!(matches!(
-            parse_confirmation("ERROR: big delete detected"),
-            Some(ConfirmationKind::BigDelete)
-        ));
-        assert!(matches!(
-            parse_confirmation("download-only cleanup warning"),
-            Some(ConfirmationKind::DownloadOnlyCleanup)
-        ));
-        assert!(matches!(
-            parse_confirmation("upload-only cannot be used with no-remote-delete"),
-            Some(ConfirmationKind::UploadOnlyNoRemoteDelete)
-        ));
     }
 }
