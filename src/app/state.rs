@@ -2,10 +2,12 @@ use super::list::TransferList;
 use crate::{
     account::Account,
     onedrive::{BackendEvent, ClientCheck, MonitorHandle, SyncHandle},
+    sync::SyncMode,
+    transfer::PreviewChange,
 };
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     rc::Rc,
     sync::mpsc,
 };
@@ -21,6 +23,8 @@ pub(in crate::app) struct AppState {
     pub(in crate::app) syncs: RefCell<HashMap<String, SyncHandle>>,
     pub(in crate::app) monitors: RefCell<HashMap<String, MonitorHandle>>,
     pub(in crate::app) active_operations: RefCell<HashMap<String, ActiveOperation>>,
+    pub(in crate::app) previews: RefCell<HashMap<String, HashMap<String, PreviewChange>>>,
+    pub(in crate::app) applying_preview_changes: RefCell<HashSet<(String, String)>>,
     pub(in crate::app) toast_overlay: adw::ToastOverlay,
     pub(in crate::app) window: adw::ApplicationWindow,
     pub(in crate::app) profile_list: gtk::ListBox,
@@ -30,8 +34,11 @@ pub(in crate::app) struct AppState {
     pub(in crate::app) transfers: TransferList,
     pub(in crate::app) account_menu_button: gtk::MenuButton,
     pub(in crate::app) settings_button: gtk::Button,
-    pub(in crate::app) one_time_sync_button: gtk::Button,
-    pub(in crate::app) monitor_button: gtk::Button,
+    pub(in crate::app) mode_dropdown: gtk::DropDown,
+    pub(in crate::app) selected_sync_mode: Cell<SyncMode>,
+    pub(in crate::app) updating_sync_mode_dropdown: Cell<bool>,
+    pub(in crate::app) sync_button: gtk::Button,
+    pub(in crate::app) preview_button: gtk::Button,
     pub(in crate::app) edit_button: gtk::Button,
 }
 
@@ -68,7 +75,9 @@ pub(in crate::app) enum ActiveOperation {
     Authentication,
     Sync,
     StoppingSync,
+    StoppingPreview,
     StoppingMonitor,
+    Preview,
 }
 
 impl ActiveOperation {
@@ -76,8 +85,10 @@ impl ActiveOperation {
         match self {
             Self::Authentication => "认证",
             Self::Sync => "一次同步",
-            Self::StoppingSync => "停止同步",
+            Self::StoppingSync => "停止",
+            Self::StoppingPreview => "停止",
             Self::StoppingMonitor => "停止持续同步",
+            Self::Preview => "预览",
         }
     }
 }

@@ -2,7 +2,7 @@ use super::{
     auth, confirm,
     render::{rebuild_profile_list, refresh_content, show_toast},
     state::{ActiveOperation, AppState},
-    update_account_status,
+    status_label, update_account_status,
 };
 use crate::{
     account::{Account, AccountStatus, save_accounts},
@@ -14,8 +14,6 @@ use crate::{
 use adw::prelude::*;
 use gtk::glib;
 use std::{collections::VecDeque, rc::Rc, time::Duration};
-
-use super::status::status_label;
 
 pub(super) fn install_backend_event_pump(state: Rc<AppState>) {
     glib::timeout_add_local(Duration::from_millis(250), move || {
@@ -112,7 +110,7 @@ fn drain_backend_events(state: &Rc<AppState>) {
                 if let Some(message) = message {
                     show_toast(state, &message);
                 } else if let Some(email) = email {
-                    show_toast(state, &format!("已识别账号: {email}"));
+                    show_toast(state, &format!("账号: {email}"));
                 }
             }
             BackendEvent::SyncFinished {
@@ -151,6 +149,106 @@ fn drain_backend_events(state: &Rc<AppState>) {
                     .is_some_and(|id| id == account_id)
                 {
                     state.transfers.upsert(file);
+                }
+            }
+            BackendEvent::PreviewEvent { account_id, change } => {
+                if state
+                    .selected_account_id()
+                    .is_some_and(|id| id == account_id)
+                {
+                    state
+                        .previews
+                        .borrow_mut()
+                        .entry(account_id.clone())
+                        .or_default()
+                        .insert(change.id.clone(), change.clone());
+                    state.transfers.upsert_preview(account_id, change);
+                }
+            }
+            BackendEvent::PreviewFinished {
+                account_id,
+                success,
+                requested_stop,
+                auth_required,
+                message,
+                requires_confirmation,
+            } => {
+                state.syncs.borrow_mut().remove(&account_id);
+                finish_active_operation(state, &account_id);
+                if auth_required {
+                    handle_auth_required(Rc::clone(state), &account_id, message);
+                    continue;
+                }
+                if let Some(kind) = requires_confirmation {
+                    handle_confirmation_required(Rc::clone(state), &account_id, kind);
+                } else if requested_stop {
+                    show_toast(state, "预览已停止");
+                } else if success {
+                    show_toast(state, "预览完成");
+                } else {
+                    show_toast(state, message.as_deref().unwrap_or("预览失败"));
+                }
+            }
+            BackendEvent::PreviewApplyFinished {
+                account_id,
+                change_id,
+                success,
+                message,
+            } => {
+                state
+                    .applying_preview_changes
+                    .borrow_mut()
+                    .remove(&(account_id.clone(), change_id.clone()));
+                if success {
+                    show_toast(state, "云端操作已完成，正在更新同步状态");
+                } else {
+                    state.transfers.mark_preview_failed(
+                        &account_id,
+                        &change_id,
+                        message.as_deref().unwrap_or("应用失败"),
+                    );
+                    show_toast(state, message.as_deref().unwrap_or("应用预览变更失败"));
+                }
+            }
+            BackendEvent::PreviewApplyProgress {
+                account_id,
+                change_id,
+                progress,
+            } => {
+                state
+                    .transfers
+                    .mark_preview_progress(&account_id, &change_id, progress);
+            }
+            BackendEvent::PreviewReconcileStarted {
+                account_id,
+                change_id,
+                scope: _,
+            } => {
+                state
+                    .transfers
+                    .mark_preview_reconciling(&account_id, &change_id);
+            }
+            BackendEvent::PreviewReconcileFinished {
+                account_id,
+                change_id,
+                success,
+                message,
+            } => {
+                if success {
+                    if let Some(previews) = state.previews.borrow_mut().get_mut(&account_id) {
+                        previews.remove(&change_id);
+                    }
+                    state
+                        .transfers
+                        .mark_preview_applied(&account_id, &change_id);
+                    show_toast(state, "已应用并更新同步状态");
+                } else {
+                    state.transfers.mark_preview_reconcile_failed(
+                        &account_id,
+                        &change_id,
+                        message.as_deref().unwrap_or("同步状态更新失败"),
+                    );
+                    show_toast(state, message.as_deref().unwrap_or("同步状态更新失败"));
                 }
             }
             BackendEvent::ConfirmationRequired { account_id, kind } => {
@@ -199,6 +297,28 @@ fn drain_backend_events(state: &Rc<AppState>) {
     }
 }
 
+pub(super) fn stop_sync(
+    state: &AppState,
+    account_id: &str,
+    operation: ActiveOperation,
+    message: &str,
+) {
+    let Some(handle) = state.syncs.borrow().get(account_id).cloned() else {
+        show_toast(state, "同步未运行");
+        return;
+    };
+
+    state
+        .active_operations
+        .borrow_mut()
+        .insert(account_id.to_string(), operation);
+    refresh_content(state);
+    if let Err(error) = stop_handle(&handle) {
+        finish_active_operation(state, account_id);
+        show_toast(state, &format!("{message}失败: {error}"));
+    }
+}
+
 fn handle_confirmation_required(state: Rc<AppState>, account_id: &str, kind: ConfirmationKind) {
     if matches!(kind, ConfirmationKind::BigDelete)
         && let Some(account) = account_by_id(&state, account_id)
@@ -224,23 +344,6 @@ pub(super) fn stop_monitor(state: &AppState, account_id: &str) {
     if let Err(error) = stop_monitor_handle(&handle) {
         finish_active_operation(state, account_id);
         show_toast(state, &format!("停止持续同步失败: {error}"));
-    }
-}
-
-pub(super) fn stop_sync(state: &AppState, account_id: &str) {
-    let Some(handle) = state.syncs.borrow().get(account_id).cloned() else {
-        show_toast(state, "一次同步未运行");
-        return;
-    };
-
-    state
-        .active_operations
-        .borrow_mut()
-        .insert(account_id.to_string(), ActiveOperation::StoppingSync);
-    refresh_content(state);
-    if let Err(error) = stop_handle(&handle) {
-        finish_active_operation(state, account_id);
-        show_toast(state, &format!("停止同步失败: {error}"));
     }
 }
 

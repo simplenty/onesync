@@ -32,9 +32,9 @@ pub(super) fn parse_onedrive_error(output: &str) -> String {
     } else if lower.contains("unknown key") || lower.contains("unknown config") {
         "配置文件包含 onedrive 不支持的选项，请编辑账户配置".to_string()
     } else if lower.contains("failed") && (lower.contains("upload") || lower.contains("download")) {
-        "部分上传或下载失败，请查看传输列表和 onedrive 输出".to_string()
+        "部分上传或下载失败，请查看传输列表和详情".to_string()
     } else if lower.contains("segmentation fault") || lower.contains("core dumped") {
-        "onedrive CLI 崩溃，请升级 CLI 或检查该账户配置".to_string()
+        "同步工具异常退出，请升级同步工具或检查该账户配置".to_string()
     } else if lower.contains("auth") || lower.contains("unauthorized") {
         "认证失败，请重新完成该账户登录".to_string()
     } else {
@@ -60,25 +60,59 @@ pub(super) fn is_auth_required(output: &str) -> bool {
 
 pub(super) fn parse_confirmation(output: &str) -> Option<ConfirmationKind> {
     let lower = output.to_ascii_lowercase();
-    if lower.contains("--resync") && lower.contains("required") {
+    if is_resync_confirmation(&lower) {
         Some(ConfirmationKind::ResyncRequired)
     } else if is_big_delete_confirmation(&lower) {
         Some(ConfirmationKind::BigDelete)
-    } else if lower.contains("download-only") && lower.contains("cleanup") {
+    } else if is_download_only_cleanup_confirmation(&lower) {
         Some(ConfirmationKind::DownloadOnlyCleanup)
-    } else if lower.contains("upload-only") && lower.contains("no-remote-delete") {
+    } else if is_upload_only_no_remote_delete_confirmation(&lower) {
         Some(ConfirmationKind::UploadOnlyNoRemoteDelete)
     } else {
         None
     }
 }
 
+fn is_resync_confirmation(lower: &str) -> bool {
+    lower.lines().any(|line| {
+        let line = line.trim();
+        line.contains("--resync")
+            && (line.contains("required")
+                || line.contains("must be used")
+                || line.contains("use --resync"))
+    })
+}
+
 fn is_big_delete_confirmation(lower: &str) -> bool {
-    lower.contains("big delete detected")
-        || lower.contains("attempt to remove a large volume of data from onedrive")
-        || (lower.contains("to delete a large volume of data")
-            && lower.contains("--force")
-            && lower.contains("classify_as_big_delete"))
+    lower.lines().any(|line| {
+        let line = line.trim();
+        line.contains("big delete detected")
+            || line.contains("attempt to remove a large volume of data from onedrive")
+            || (line.contains("to delete a large volume of data")
+                && line.contains("--force")
+                && line.contains("classify_as_big_delete"))
+    })
+}
+
+fn is_download_only_cleanup_confirmation(lower: &str) -> bool {
+    lower.lines().any(|line| {
+        let line = line.trim();
+        line.contains("download-only")
+            && line.contains("cleanup")
+            && (line.contains("warning") || line.contains("risk") || line.contains("cannot"))
+    })
+}
+
+fn is_upload_only_no_remote_delete_confirmation(lower: &str) -> bool {
+    lower.lines().any(|line| {
+        let line = line.trim();
+        line.contains("upload-only")
+            && line.contains("no-remote-delete")
+            && (line.contains("cannot")
+                || line.contains("invalid")
+                || line.contains("not permitted")
+                || line.contains("incompatible"))
+    })
 }
 
 #[cfg(test)]
@@ -160,5 +194,17 @@ mod tests {
         );
         assert!(parse_confirmation("large delete batch finished successfully").is_none());
         assert!(parse_confirmation("classify_as_big_delete = 1000").is_none());
+    }
+
+    #[test]
+    fn avoids_false_option_combination_confirmation_matches() {
+        assert!(
+            parse_confirmation("download-only sync finished; cleanup was not requested").is_none()
+        );
+        assert!(
+            parse_confirmation("upload-only profile has no-remote-delete documented in notes")
+                .is_none()
+        );
+        assert!(parse_confirmation("resync metadata check finished without action").is_none());
     }
 }

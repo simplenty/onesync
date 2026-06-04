@@ -1,4 +1,4 @@
-use crate::transfer::SyncFile;
+use crate::transfer::{PreviewChange, SyncFile};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Version {
@@ -24,14 +24,14 @@ impl ClientCheck {
     #[must_use]
     pub fn message(&self) -> String {
         match self {
-            Self::Unknown => "正在检测 onedrive CLI".to_string(),
+            Self::Unknown => "正在检测同步工具".to_string(),
             Self::Ready(version) => format!(
-                "onedrive CLI {}.{}.{} 可用",
+                "同步工具 {}.{}.{} 可用",
                 version.major, version.minor, version.patch
             ),
-            Self::Missing(error) => format!("未找到 onedrive CLI: {error}"),
+            Self::Missing(error) => format!("未找到同步工具: {error}"),
             Self::Unsupported { found, minimum } => format!(
-                "onedrive CLI 版本过低: 当前 {}.{}.{}, 需要 >= {}.{}.{}",
+                "同步工具版本过低: 当前 {}.{}.{}, 需要 >= {}.{}.{}",
                 found.major, found.minor, found.patch, minimum.major, minimum.minor, minimum.patch
             ),
         }
@@ -39,6 +39,7 @@ impl ClientCheck {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum BackendEvent {
     ClientChecked(ClientCheck),
     AuthUrl {
@@ -67,6 +68,40 @@ pub enum BackendEvent {
     TransferEvent {
         account_id: String,
         file: SyncFile,
+    },
+    PreviewEvent {
+        account_id: String,
+        change: PreviewChange,
+    },
+    PreviewFinished {
+        account_id: String,
+        success: bool,
+        requested_stop: bool,
+        auth_required: bool,
+        message: Option<String>,
+        requires_confirmation: Option<ConfirmationKind>,
+    },
+    PreviewApplyFinished {
+        account_id: String,
+        change_id: String,
+        success: bool,
+        message: Option<String>,
+    },
+    PreviewApplyProgress {
+        account_id: String,
+        change_id: String,
+        progress: f64,
+    },
+    PreviewReconcileStarted {
+        account_id: String,
+        change_id: String,
+        scope: String,
+    },
+    PreviewReconcileFinished {
+        account_id: String,
+        change_id: String,
+        success: bool,
+        message: Option<String>,
     },
     ConfirmationRequired {
         account_id: String,

@@ -1,15 +1,17 @@
 use super::{
+    account_label,
     auth::show_auth_dialog,
-    can_mutate_profile,
+    can_mutate_profile, load_sync_mode_for_selected_profile,
     render::{rebuild_profile_list, refresh_content, show_toast},
     state::AppState,
-    status::{account_label, status_label},
+    status_label,
     widgets::form_row,
 };
 use crate::account::{
     Account, create_account, remove_confirmation_matches, save_accounts, suggested_account_name,
     suggested_sync_dir,
 };
+use crate::settings::remove_profile_sync_mode;
 use adw::prelude::*;
 use gtk::Align;
 use std::{cell::Cell, rc::Rc};
@@ -94,6 +96,7 @@ pub(in crate::app) fn show_add_account_dialog(state: Rc<AppState>) {
                 }
                 dialog_state.selected_index.set(last_index);
                 rebuild_profile_list(&dialog_state);
+                load_sync_mode_for_selected_profile(&dialog_state);
                 refresh_content(&dialog_state);
                 dialog_state.transfers.clear();
                 show_toast(&dialog_state, "账号已添加");
@@ -371,7 +374,11 @@ fn remove_profile(state: &Rc<AppState>, account: &Account) {
     if let Err(error) = save_accounts(&state.accounts.borrow()) {
         show_toast(state, &format!("保存账号失败: {error}"));
     }
+    if let Err(error) = remove_profile_sync_mode(&account.id) {
+        show_toast(state, &format!("删除同步模式设置失败: {error}"));
+    }
     rebuild_profile_list(state);
+    load_sync_mode_for_selected_profile(state);
     refresh_content(state);
     state.transfers.clear();
 }

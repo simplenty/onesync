@@ -7,7 +7,7 @@ use super::{
 use crate::{
     account::{Account, auth_response_path, auth_url_path, is_authenticated},
     config::ensure_transfer_metrics_enabled,
-    transfer::parse_transfer_line,
+    transfer::{parse_preview_line, parse_transfer_line},
 };
 use std::{
     fs,
@@ -36,6 +36,12 @@ pub struct SyncHandle {
 
 pub type MonitorHandle = SyncHandle;
 
+#[derive(Clone, Copy)]
+enum OutputMode {
+    Live,
+    Preview,
+}
+
 pub fn check_client(binary: String, sender: mpsc::Sender<BackendEvent>) {
     thread::spawn(move || {
         let result = match Command::new(&binary).arg("--version").output() {
@@ -48,7 +54,7 @@ pub fn check_client(binary: String, sender: mpsc::Sender<BackendEvent>) {
                         found: version,
                         minimum: MIN_ONEDRIVE_VERSION,
                     },
-                    None => ClientCheck::Missing("无法解析 onedrive --version 输出".to_string()),
+                    None => ClientCheck::Missing("无法确认同步工具版本".to_string()),
                 }
             }
             Err(error) => ClientCheck::Missing(format!("{binary}: {error}")),
@@ -140,6 +146,67 @@ pub fn start_forced_sync(
     start_sync_with_force(account, binary, sender, true)
 }
 
+pub fn start_preview(
+    account: Account,
+    binary: String,
+    sender: mpsc::Sender<BackendEvent>,
+) -> io::Result<SyncHandle> {
+    ensure_transfer_metrics_enabled(&account.config_dir)?;
+
+    let mut child = Command::new(binary)
+        .arg("--confdir")
+        .arg(&account.config_dir)
+        .arg("--sync")
+        .arg("--verbose")
+        .arg("--local-first")
+        .arg("--dry-run")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let output = attach_readers(&account.id, &mut child, &sender, OutputMode::Preview);
+    let child = Arc::new(Mutex::new(child));
+    let stop_requested = Arc::new(AtomicBool::new(false));
+    let wait_child = Arc::clone(&child);
+    let wait_stop_requested = Arc::clone(&stop_requested);
+
+    thread::spawn(move || {
+        let result = wait_for_child(&wait_child);
+        let requested_stop = wait_stop_requested.load(Ordering::SeqCst);
+        let combined = output
+            .lock()
+            .map(|output| output.clone())
+            .unwrap_or_default();
+        match result {
+            Ok(success) => {
+                let _ = sender.send(BackendEvent::PreviewFinished {
+                    account_id: account.id,
+                    success,
+                    requested_stop,
+                    auth_required: !success && is_auth_required(&combined),
+                    message: (!success && !requested_stop).then(|| parse_onedrive_error(&combined)),
+                    requires_confirmation: parse_confirmation(&combined),
+                });
+            }
+            Err(error) => {
+                let _ = sender.send(BackendEvent::PreviewFinished {
+                    account_id: account.id,
+                    success: false,
+                    requested_stop,
+                    auth_required: false,
+                    message: Some(format!("等待预览进程失败: {error}")),
+                    requires_confirmation: None,
+                });
+            }
+        }
+    });
+
+    Ok(SyncHandle {
+        child,
+        stop_requested,
+    })
+}
+
 fn start_sync_with_force(
     account: Account,
     binary: String,
@@ -162,7 +229,7 @@ fn start_sync_with_force(
         .stderr(Stdio::piped())
         .spawn()?;
 
-    let output = attach_readers(&account.id, &mut child, &sender);
+    let output = attach_readers(&account.id, &mut child, &sender, OutputMode::Live);
     let child = Arc::new(Mutex::new(child));
     let stop_requested = Arc::new(AtomicBool::new(false));
     let wait_child = Arc::clone(&child);
@@ -223,7 +290,7 @@ pub fn start_monitor(
         .stderr(Stdio::piped())
         .spawn()?;
 
-    let output = attach_readers(&account.id, &mut child, &sender);
+    let output = attach_readers(&account.id, &mut child, &sender, OutputMode::Live);
     let child = Arc::new(Mutex::new(child));
     let stop_requested = Arc::new(AtomicBool::new(false));
     let wait_child = Arc::clone(&child);
@@ -285,6 +352,66 @@ pub fn start_monitor(
     })
 }
 
+pub fn reconcile_preview_change(
+    account: &Account,
+    binary: String,
+    path: &str,
+) -> io::Result<String> {
+    ensure_transfer_metrics_enabled(&account.config_dir)?;
+
+    let mut command = Command::new(binary);
+    command
+        .arg("--confdir")
+        .arg(&account.config_dir)
+        .arg("--sync")
+        .arg("--verbose");
+
+    if let Some(scope) = single_directory_scope(path) {
+        command.arg("--single-directory").arg(scope);
+    }
+
+    run_reconcile_command(command)
+}
+
+pub fn display_reconcile_status(
+    account: &Account,
+    binary: String,
+    path: &str,
+) -> io::Result<String> {
+    let mut command = Command::new(binary);
+    command
+        .arg("--confdir")
+        .arg(&account.config_dir)
+        .arg("--display-sync-status");
+
+    if let Some(scope) = single_directory_scope(path) {
+        command.arg("--single-directory").arg(scope);
+    }
+
+    run_reconcile_command(command)
+}
+
+fn single_directory_scope(path: &str) -> Option<String> {
+    let normalized = path.trim_start_matches("./").trim_matches('/');
+    let (parent, _) = normalized.rsplit_once('/')?;
+    if parent.is_empty() {
+        None
+    } else {
+        Some(parent.to_string())
+    }
+}
+
+fn run_reconcile_command(mut command: Command) -> io::Result<String> {
+    let output = command.output()?;
+    let combined = combined_output(&output.stdout, &output.stderr);
+
+    if output.status.success() {
+        Ok(combined)
+    } else {
+        Err(io::Error::other(combined.trim().to_string()))
+    }
+}
+
 pub fn stop_handle(handle: &SyncHandle) -> io::Result<()> {
     handle.stop_requested.store(true, Ordering::SeqCst);
     let mut child = handle
@@ -340,6 +467,7 @@ fn attach_readers(
     account_id: &str,
     child: &mut Child,
     sender: &mpsc::Sender<BackendEvent>,
+    mode: OutputMode,
 ) -> Arc<Mutex<String>> {
     let output = Arc::new(Mutex::new(String::new()));
     if let Some(stdout) = child.stdout.take() {
@@ -348,6 +476,7 @@ fn attach_readers(
             stdout,
             sender.clone(),
             Arc::clone(&output),
+            mode,
         );
     }
     if let Some(stderr) = child.stderr.take() {
@@ -356,6 +485,7 @@ fn attach_readers(
             stderr,
             sender.clone(),
             Arc::clone(&output),
+            mode,
         );
     }
     output
@@ -366,6 +496,7 @@ fn spawn_transfer_reader<R>(
     reader: R,
     sender: mpsc::Sender<BackendEvent>,
     output: Arc<Mutex<String>>,
+    mode: OutputMode,
 ) where
     R: Read + Send + 'static,
 {
@@ -378,7 +509,7 @@ fn spawn_transfer_reader<R>(
                 Ok(0) => break,
                 Ok(_) => {
                     if byte[0] == b'\n' || byte[0] == b'\r' {
-                        send_transfer_chunk(&account_id, &buffer, &sender, &output);
+                        send_transfer_chunk(&account_id, &buffer, &sender, &output, mode);
                         buffer.clear();
                     } else {
                         buffer.push(byte[0]);
@@ -388,7 +519,7 @@ fn spawn_transfer_reader<R>(
             }
         }
         if !buffer.is_empty() {
-            send_transfer_chunk(&account_id, &buffer, &sender, &output);
+            send_transfer_chunk(&account_id, &buffer, &sender, &output, mode);
         }
     });
 }
@@ -398,6 +529,7 @@ fn send_transfer_chunk(
     chunk: &[u8],
     sender: &mpsc::Sender<BackendEvent>,
     output: &Arc<Mutex<String>>,
+    mode: OutputMode,
 ) {
     let line = String::from_utf8_lossy(chunk);
     let line = line.trim();
@@ -408,11 +540,23 @@ fn send_transfer_chunk(
         output.push_str(line);
         output.push('\n');
     }
-    if let Some(file) = parse_transfer_line(line) {
-        let _ = sender.send(BackendEvent::TransferEvent {
-            account_id: account_id.to_string(),
-            file,
-        });
+    match mode {
+        OutputMode::Live => {
+            if let Some(file) = parse_transfer_line(line) {
+                let _ = sender.send(BackendEvent::TransferEvent {
+                    account_id: account_id.to_string(),
+                    file,
+                });
+            }
+        }
+        OutputMode::Preview => {
+            if let Some(change) = parse_preview_line(line) {
+                let _ = sender.send(BackendEvent::PreviewEvent {
+                    account_id: account_id.to_string(),
+                    change,
+                });
+            }
+        }
     }
     if let Some(kind) = parse_confirmation(line) {
         let _ = sender.send(BackendEvent::ConfirmationRequired {
@@ -425,6 +569,72 @@ fn send_transfer_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn fake_onedrive_binary(
+        output: &str,
+        exit_code: i32,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::{
+            env,
+            os::unix::fs::PermissionsExt,
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        let root = env::temp_dir().join(format!(
+            "onesync-fake-onedrive-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let args_file = root.join("args");
+        let binary = root.join("fake-onedrive");
+        fs::write(
+            &binary,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprintf '%s' '{}'\nexit {}\n",
+                args_file.display(),
+                output.replace('\'', "'\\''"),
+                exit_code
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&binary, permissions).unwrap();
+        (binary, args_file)
+    }
+
+    #[cfg(unix)]
+    fn test_account() -> Account {
+        use crate::account::AccountStatus;
+        use std::{
+            env,
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        let root = env::temp_dir().join(format!(
+            "onesync-account-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let config_dir = root.join("profile");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config"), "sync_dir = \"~/OneDrive\"\n").unwrap();
+
+        Account {
+            id: "test-account".to_string(),
+            name: "Test Account".to_string(),
+            email: String::new(),
+            config_dir: config_dir.to_string_lossy().to_string(),
+            sync_dir: "~/OneDrive".to_string(),
+            status: AccountStatus::Authenticated,
+        }
+    }
 
     #[cfg(unix)]
     #[test]
@@ -545,5 +755,169 @@ mod tests {
         assert!(args.lines().any(|arg| arg == "--force"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preview_sync_passes_dry_run_flag_to_onedrive() {
+        use crate::account::AccountStatus;
+        use std::{
+            env,
+            os::unix::fs::PermissionsExt,
+            sync::mpsc,
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        let root = env::temp_dir().join(format!(
+            "onesync-preview-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let config_dir = root.join("profile");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config"), "sync_dir = \"~/OneDrive\"\n").unwrap();
+        let args_file = root.join("args");
+        let binary = root.join("fake-onedrive");
+        fs::write(
+            &binary,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprintf '%s\\n' 'Uploading new file: ./docs/a.txt ... done'\n",
+                args_file.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&binary, permissions).unwrap();
+
+        let account = Account {
+            id: "preview-sync".to_string(),
+            name: "Preview Sync".to_string(),
+            email: String::new(),
+            config_dir: config_dir.to_string_lossy().to_string(),
+            sync_dir: "~/OneDrive".to_string(),
+            status: AccountStatus::Authenticated,
+        };
+        let (sender, receiver) = mpsc::channel();
+        let _handle = start_preview(account, binary.to_string_lossy().to_string(), sender).unwrap();
+
+        let events = [
+            receiver.recv_timeout(Duration::from_secs(3)).unwrap(),
+            receiver.recv_timeout(Duration::from_secs(3)).unwrap(),
+        ];
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::PreviewEvent { .. }))
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            BackendEvent::PreviewFinished {
+                success: true,
+                requested_stop: false,
+                ..
+            }
+        )));
+
+        let args = fs::read_to_string(args_file).unwrap();
+        assert!(args.lines().any(|arg| arg == "--sync"));
+        assert!(args.lines().any(|arg| arg == "--verbose"));
+        assert!(args.lines().any(|arg| arg == "--local-first"));
+        assert!(args.lines().any(|arg| arg == "--dry-run"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preview_handle_reports_requested_stop() {
+        use crate::account::AccountStatus;
+        use std::{
+            env,
+            os::unix::fs::PermissionsExt,
+            sync::mpsc,
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        let root = env::temp_dir().join(format!(
+            "onesync-preview-stop-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let config_dir = root.join("profile");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config"), "sync_dir = \"~/OneDrive\"\n").unwrap();
+        let binary = root.join("fake-onedrive");
+        fs::write(
+            &binary,
+            "#!/bin/sh\ntrap 'exit 0' TERM\nwhile true; do sleep 1; done\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&binary, permissions).unwrap();
+
+        let account = Account {
+            id: "preview-stop".to_string(),
+            name: "Preview Stop".to_string(),
+            email: String::new(),
+            config_dir: config_dir.to_string_lossy().to_string(),
+            sync_dir: "~/OneDrive".to_string(),
+            status: AccountStatus::Authenticated,
+        };
+        let (sender, receiver) = mpsc::channel();
+        let handle = start_preview(account, binary.to_string_lossy().to_string(), sender).unwrap();
+
+        stop_handle(&handle).unwrap();
+        let event = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+        match event {
+            BackendEvent::PreviewFinished {
+                requested_stop,
+                auth_required,
+                ..
+            } => {
+                assert!(requested_stop);
+                assert!(!auth_required);
+            }
+            other => panic!("expected PreviewFinished, got {other:?}"),
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reconcile_preview_change_uses_single_directory_parent_scope() {
+        let (binary, output_path) =
+            fake_onedrive_binary("Sync with Microsoft OneDrive is complete\n", 0);
+        let account = test_account();
+
+        reconcile_preview_change(&account, binary.to_string_lossy().to_string(), "docs/a.txt")
+            .expect("reconcile should succeed");
+
+        let args = fs::read_to_string(output_path).expect("args should be captured");
+        assert!(args.lines().any(|arg| arg == "--sync"));
+        assert!(args.lines().any(|arg| arg == "--verbose"));
+        assert!(args.lines().any(|arg| arg == "--single-directory"));
+        assert!(args.lines().any(|arg| arg == "docs"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn display_reconcile_status_uses_single_directory_parent_scope() {
+        let (binary, output_path) = fake_onedrive_binary("The directory is in sync\n", 0);
+        let account = test_account();
+
+        display_reconcile_status(&account, binary.to_string_lossy().to_string(), "docs/a.txt")
+            .expect("status should succeed");
+
+        let args = fs::read_to_string(output_path).expect("args should be captured");
+        assert!(args.lines().any(|arg| arg == "--display-sync-status"));
+        assert!(args.lines().any(|arg| arg == "--single-directory"));
+        assert!(args.lines().any(|arg| arg == "docs"));
     }
 }

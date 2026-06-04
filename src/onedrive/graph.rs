@@ -1,0 +1,634 @@
+use super::{event::BackendEvent, identity::graph_access_token};
+use crate::{
+    account::Account,
+    transfer::{PreviewApply, PreviewChange},
+    utils::expand_home,
+};
+use reqwest::blocking::{Client, Response};
+use serde::Deserialize;
+use std::{
+    fs,
+    io::Write,
+    io::{self, Read},
+    path::{Path, PathBuf},
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
+
+const GRAPH_ROOT: &str = "https://graph.microsoft.com/v1.0";
+const SIMPLE_UPLOAD_LIMIT: u64 = 250 * 1024 * 1024;
+const LARGE_UPLOAD_CHUNK: u64 = 10 * 1024 * 1024;
+
+#[derive(Debug, Deserialize)]
+struct DriveItemResponse {
+    id: String,
+    #[serde(default)]
+    size: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadSessionResponse {
+    upload_url: String,
+}
+
+pub fn start_apply_preview_change(
+    account: Account,
+    change: PreviewChange,
+    binary: String,
+    sender: mpsc::Sender<BackendEvent>,
+) {
+    thread::spawn(move || {
+        let change_id = change.id.clone();
+        let result = apply_preview_change(&account, &change, &sender)
+            .and_then(|_| finish_graph_apply_with_reconcile(&account, &change, binary, &sender));
+        let _ = sender.send(BackendEvent::PreviewApplyFinished {
+            account_id: account.id,
+            change_id,
+            success: result.is_ok(),
+            message: result.err().map(|_| "应用失败，请稍后重试".to_string()),
+        });
+    });
+}
+
+fn apply_preview_change(
+    account: &Account,
+    change: &PreviewChange,
+    sender: &mpsc::Sender<BackendEvent>,
+) -> io::Result<()> {
+    let access_token = graph_access_token(account)?;
+    let client = Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(io::Error::other)?;
+
+    match change.apply {
+        PreviewApply::UploadLocalToRemote => {
+            upload_local_file(&client, &access_token, account, change, sender)
+        }
+        PreviewApply::DownloadRemoteToLocal => {
+            download_remote_file(&client, &access_token, account, change, sender)
+        }
+        PreviewApply::DeleteRemote => delete_remote_item(&client, &access_token, &change.path),
+        PreviewApply::DeleteLocal => delete_local_item(account, &change.path),
+        PreviewApply::MoveRemoteItem | PreviewApply::RenameRemoteItem => {
+            move_remote_item(&client, &access_token, change)
+        }
+    }
+}
+
+fn finish_graph_apply_with_reconcile(
+    account: &Account,
+    change: &PreviewChange,
+    binary: String,
+    sender: &mpsc::Sender<BackendEvent>,
+) -> io::Result<()> {
+    let scope = reconcile_scope_label(&change.path);
+    let _ = sender.send(BackendEvent::PreviewReconcileStarted {
+        account_id: account.id.clone(),
+        change_id: change.id.clone(),
+        scope: scope.clone(),
+    });
+
+    let reconcile = super::process::reconcile_preview_change(account, binary.clone(), &change.path)
+        .and_then(|_| super::process::display_reconcile_status(account, binary, &change.path));
+
+    let success = reconcile.is_ok();
+    let message = reconcile
+        .as_ref()
+        .err()
+        .map(|_| "同步状态更新失败，请稍后重试".to_string());
+    let _ = sender.send(BackendEvent::PreviewReconcileFinished {
+        account_id: account.id.clone(),
+        change_id: change.id.clone(),
+        success,
+        message: message.clone(),
+    });
+
+    reconcile.map(|_| ())
+}
+
+fn reconcile_scope_label(path: &str) -> String {
+    path.trim_start_matches("./")
+        .trim_matches('/')
+        .rsplit_once('/')
+        .map_or(".".to_string(), |(parent, _)| parent.to_string())
+}
+
+fn upload_local_file(
+    client: &Client,
+    token: &str,
+    account: &Account,
+    change: &PreviewChange,
+    sender: &mpsc::Sender<BackendEvent>,
+) -> io::Result<()> {
+    let path = change.path.as_str();
+    let local_path = local_path(account, path);
+    let size = fs::metadata(&local_path)?.len();
+    ensure_remote_parent_dirs(client, token, path)?;
+    send_apply_progress(sender, &account.id, &change.id, 0.0);
+    if size <= SIMPLE_UPLOAD_LIMIT {
+        let file = fs::File::open(&local_path)?;
+        let body = ProgressReader::new(
+            file,
+            size,
+            account.id.clone(),
+            change.id.clone(),
+            sender.clone(),
+        );
+        let url = format!("{GRAPH_ROOT}/me/drive/root:/{}:/content", graph_path(path));
+        response_to_io(
+            client
+                .put(url)
+                .bearer_auth(token)
+                .header("Content-Length", size.to_string())
+                .body(reqwest::blocking::Body::new(body))
+                .send(),
+        )?;
+        send_apply_progress(sender, &account.id, &change.id, 1.0);
+        Ok(())
+    } else {
+        upload_large_file(client, token, account, change, &local_path, size, sender)
+    }
+}
+
+fn upload_large_file(
+    client: &Client,
+    token: &str,
+    account: &Account,
+    change: &PreviewChange,
+    local_path: &Path,
+    size: u64,
+    sender: &mpsc::Sender<BackendEvent>,
+) -> io::Result<()> {
+    let url = format!(
+        "{GRAPH_ROOT}/me/drive/root:/{}:/createUploadSession",
+        graph_path(&change.path)
+    );
+    let session = response_to_io(
+        client
+            .post(url)
+            .bearer_auth(token)
+            .json(
+                &serde_json::json!({ "item": { "@microsoft.graph.conflictBehavior": "replace" } }),
+            )
+            .send(),
+    )?
+    .json::<UploadSessionResponse>()
+    .map_err(io::Error::other)?;
+
+    let mut file = fs::File::open(local_path)?;
+    let mut offset = 0_u64;
+    while offset < size {
+        let next = (offset + LARGE_UPLOAD_CHUNK).min(size);
+        let length = next - offset;
+        let mut buffer = vec![0_u8; length as usize];
+        file.read_exact(&mut buffer)?;
+        response_to_io(
+            client
+                .put(&session.upload_url)
+                .header("Content-Length", length.to_string())
+                .header(
+                    "Content-Range",
+                    format!("bytes {}-{}/{}", offset, next - 1, size),
+                )
+                .body(buffer)
+                .send(),
+        )?;
+        offset = next;
+        send_apply_progress(
+            sender,
+            &account.id,
+            &change.id,
+            offset as f64 / size.max(1) as f64,
+        );
+    }
+
+    Ok(())
+}
+
+struct ProgressReader<R> {
+    inner: R,
+    total: u64,
+    read: u64,
+    account_id: String,
+    change_id: String,
+    sender: mpsc::Sender<BackendEvent>,
+}
+
+impl<R> ProgressReader<R> {
+    fn new(
+        inner: R,
+        total: u64,
+        account_id: String,
+        change_id: String,
+        sender: mpsc::Sender<BackendEvent>,
+    ) -> Self {
+        Self {
+            inner,
+            total,
+            read: 0,
+            account_id,
+            change_id,
+            sender,
+        }
+    }
+}
+
+impl<R: Read> Read for ProgressReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let bytes_read = self.inner.read(buffer)?;
+        if bytes_read > 0 {
+            self.read = self.read.saturating_add(bytes_read as u64);
+            send_apply_progress(
+                &self.sender,
+                &self.account_id,
+                &self.change_id,
+                self.read as f64 / self.total.max(1) as f64,
+            );
+        }
+        Ok(bytes_read)
+    }
+}
+
+fn send_apply_progress(
+    sender: &mpsc::Sender<BackendEvent>,
+    account_id: &str,
+    change_id: &str,
+    progress: f64,
+) {
+    let _ = sender.send(BackendEvent::PreviewApplyProgress {
+        account_id: account_id.to_string(),
+        change_id: change_id.to_string(),
+        progress: progress.clamp(0.0, 1.0),
+    });
+}
+
+fn download_remote_file(
+    client: &Client,
+    token: &str,
+    account: &Account,
+    change: &PreviewChange,
+    sender: &mpsc::Sender<BackendEvent>,
+) -> io::Result<()> {
+    let path = change.path.as_str();
+    let item = get_drive_item(client, token, path)?;
+    let url = format!("{GRAPH_ROOT}/me/drive/root:/{}:/content", graph_path(path));
+    let mut response = response_to_io(client.get(url).bearer_auth(token).send())?;
+    let total = if item.size > 0 {
+        item.size
+    } else {
+        response.content_length().unwrap_or(0)
+    };
+    let local_path = local_path(account, path);
+    if let Some(parent) = local_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temp_path = local_path.with_extension("onesync-download");
+    let mut temp_file = fs::File::create(&temp_path)?;
+    let mut downloaded = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    send_apply_progress(sender, &account.id, &change.id, 0.0);
+    loop {
+        let bytes_read = response.read(&mut buffer).map_err(io::Error::other)?;
+        if bytes_read == 0 {
+            break;
+        }
+        temp_file.write_all(&buffer[..bytes_read])?;
+        downloaded = downloaded.saturating_add(bytes_read as u64);
+        if total > 0 {
+            send_apply_progress(
+                sender,
+                &account.id,
+                &change.id,
+                downloaded as f64 / total as f64,
+            );
+        }
+    }
+    temp_file.flush()?;
+    fs::rename(temp_path, local_path)?;
+    send_apply_progress(sender, &account.id, &change.id, 1.0);
+    Ok(())
+}
+
+fn delete_remote_item(client: &Client, token: &str, path: &str) -> io::Result<()> {
+    let item = get_drive_item(client, token, path)?;
+    response_to_io(
+        client
+            .delete(format!("{GRAPH_ROOT}/me/drive/items/{}", item.id))
+            .bearer_auth(token)
+            .send(),
+    )?;
+    Ok(())
+}
+
+fn delete_local_item(account: &Account, path: &str) -> io::Result<()> {
+    let local_path = local_path(account, path);
+    if local_path.is_dir() {
+        fs::remove_dir(&local_path)
+    } else {
+        fs::remove_file(&local_path)
+    }
+}
+
+fn move_remote_item(client: &Client, token: &str, change: &PreviewChange) -> io::Result<()> {
+    let source = change.source_path.as_deref().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "move or rename preview is missing source path",
+        )
+    })?;
+    let source_item = get_drive_item(client, token, source)?;
+    let (target_parent, target_name) = split_parent_and_name(&change.path);
+    let parent_item = if target_parent.is_empty() {
+        get_drive_item(client, token, "")?
+    } else {
+        get_drive_item(client, token, &target_parent)?
+    };
+
+    response_to_io(
+        client
+            .patch(format!("{GRAPH_ROOT}/me/drive/items/{}", source_item.id))
+            .bearer_auth(token)
+            .json(&serde_json::json!({
+                "parentReference": { "id": parent_item.id },
+                "name": target_name,
+            }))
+            .send(),
+    )?;
+    Ok(())
+}
+
+fn ensure_remote_parent_dirs(client: &Client, token: &str, path: &str) -> io::Result<()> {
+    let (parent, _) = split_parent_and_name(path);
+    if parent.is_empty() {
+        return Ok(());
+    }
+
+    let mut current = String::new();
+    for segment in parent.split('/').filter(|segment| !segment.is_empty()) {
+        current = if current.is_empty() {
+            segment.to_string()
+        } else {
+            format!("{current}/{segment}")
+        };
+        if get_drive_item(client, token, &current).is_err() {
+            create_remote_folder(client, token, &current)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn create_remote_folder(client: &Client, token: &str, path: &str) -> io::Result<()> {
+    let (parent, name) = split_parent_and_name(path);
+    let url = if parent.is_empty() {
+        format!("{GRAPH_ROOT}/me/drive/root/children")
+    } else {
+        let parent_item = get_drive_item(client, token, &parent)?;
+        format!("{GRAPH_ROOT}/me/drive/items/{}/children", parent_item.id)
+    };
+
+    response_to_io(
+        client
+            .post(url)
+            .bearer_auth(token)
+            .json(&serde_json::json!({
+                "name": name,
+                "folder": {},
+                "@microsoft.graph.conflictBehavior": "fail",
+            }))
+            .send(),
+    )?;
+    Ok(())
+}
+
+fn get_drive_item(client: &Client, token: &str, path: &str) -> io::Result<DriveItemResponse> {
+    let url = if path.is_empty() {
+        format!("{GRAPH_ROOT}/me/drive/root")
+    } else {
+        format!("{GRAPH_ROOT}/me/drive/root:/{}", graph_path(path))
+    };
+    response_to_io(client.get(url).bearer_auth(token).send())?
+        .json::<DriveItemResponse>()
+        .map_err(io::Error::other)
+}
+
+fn local_path(account: &Account, path: &str) -> PathBuf {
+    expand_home(&account.sync_dir).join(path.trim_start_matches("./"))
+}
+
+fn response_to_io(result: Result<Response, reqwest::Error>) -> io::Result<Response> {
+    result
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .map_err(io::Error::other)
+}
+
+fn graph_path(path: &str) -> String {
+    path.trim_start_matches("./")
+        .split('/')
+        .map(percent_encode_segment)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn percent_encode_segment(segment: &str) -> String {
+    let mut encoded = String::new();
+    for byte in segment.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn split_parent_and_name(path: &str) -> (String, String) {
+    let trimmed = path.trim_start_matches("./").trim_matches('/');
+    match trimmed.rsplit_once('/') {
+        Some((parent, name)) => (parent.to_string(), name.to_string()),
+        None => (String::new(), trimmed.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        account::{Account, AccountStatus},
+        transfer::{
+            PreviewBasis, PreviewConfidence, PreviewIntent, PreviewState, TransferDirection,
+            TransferKind,
+        },
+    };
+    use std::{fs, io::Cursor, sync::mpsc};
+
+    #[cfg(unix)]
+    fn fake_onedrive_binary(
+        output: &str,
+        exit_code: i32,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::{
+            env,
+            os::unix::fs::PermissionsExt,
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        let root = env::temp_dir().join(format!(
+            "onesync-graph-fake-onedrive-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let args_file = root.join("args");
+        let binary = root.join("fake-onedrive");
+        fs::write(
+            &binary,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\nprintf '%s' '{}'\nexit {}\n",
+                args_file.display(),
+                output.replace('\'', "'\\''"),
+                exit_code
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&binary, permissions).unwrap();
+        (binary, args_file)
+    }
+
+    #[cfg(unix)]
+    fn test_account() -> Account {
+        use std::{
+            env,
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        let root = env::temp_dir().join(format!(
+            "onesync-graph-account-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let config_dir = root.join("profile");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config"), "sync_dir = \"~/OneDrive\"\n").unwrap();
+
+        Account {
+            id: "graph-account".to_string(),
+            name: "Graph Account".to_string(),
+            email: String::new(),
+            config_dir: config_dir.to_string_lossy().to_string(),
+            sync_dir: "~/OneDrive".to_string(),
+            status: AccountStatus::Authenticated,
+        }
+    }
+
+    fn preview_change(path: &str, apply: PreviewApply) -> PreviewChange {
+        PreviewChange {
+            id: format!("upload-new:{path}"),
+            path: path.to_string(),
+            source_path: None,
+            kind: TransferKind::UploadNew,
+            direction: TransferDirection::LocalToRemote,
+            apply,
+            intent: PreviewIntent::LocalChangeToRemote,
+            basis: PreviewBasis::CliDryRun,
+            confidence: PreviewConfidence::Exact,
+            state: PreviewState::Pending,
+            description: "将上传到 OneDrive".to_string(),
+            icon: "go-up-symbolic",
+        }
+    }
+
+    #[test]
+    fn graph_path_encodes_spaces_and_hashes_but_keeps_slashes() {
+        assert_eq!(graph_path("Folder A/a#b.txt"), "Folder%20A/a%23b.txt");
+    }
+
+    #[test]
+    fn parent_path_and_file_name_split_nested_path() {
+        assert_eq!(
+            split_parent_and_name("docs/archive/a.txt"),
+            ("docs/archive".to_string(), "a.txt".to_string())
+        );
+        assert_eq!(
+            split_parent_and_name("a.txt"),
+            (String::new(), "a.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn drive_item_size_defaults_when_missing() {
+        let item: DriveItemResponse = serde_json::from_str(r#"{"id":"abc"}"#).unwrap();
+        assert_eq!(item.id, "abc");
+        assert_eq!(item.size, 0);
+
+        let item: DriveItemResponse = serde_json::from_str(r#"{"id":"abc","size":4096}"#).unwrap();
+        assert_eq!(item.size, 4096);
+    }
+
+    #[test]
+    fn progress_reader_reports_apply_progress() {
+        let (sender, receiver) = mpsc::channel();
+        let mut reader = ProgressReader::new(
+            Cursor::new(vec![1_u8, 2, 3, 4]),
+            4,
+            "account".to_string(),
+            "change".to_string(),
+            sender,
+        );
+        let mut buffer = Vec::new();
+
+        reader.read_to_end(&mut buffer).unwrap();
+
+        assert_eq!(buffer, vec![1, 2, 3, 4]);
+        let events: Vec<BackendEvent> = receiver.try_iter().collect();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            BackendEvent::PreviewApplyProgress {
+                account_id,
+                change_id,
+                progress,
+            } if account_id == "account" && change_id == "change" && (*progress - 1.0).abs() < f64::EPSILON
+        )));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn successful_graph_apply_emits_reconcile_events() {
+        let (sender, receiver) = mpsc::channel();
+        let account = test_account();
+        let (binary, _output_path) = fake_onedrive_binary(
+            "Sync with Microsoft OneDrive is complete\nThe directory is in sync\n",
+            0,
+        );
+        let change = preview_change("docs/a.txt", PreviewApply::UploadLocalToRemote);
+
+        finish_graph_apply_with_reconcile(
+            &account,
+            &change,
+            binary.to_string_lossy().to_string(),
+            &sender,
+        )
+        .expect("reconcile should succeed");
+
+        let events: Vec<BackendEvent> = receiver.try_iter().collect();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            BackendEvent::PreviewReconcileStarted { change_id, scope, .. }
+                if change_id == "upload-new:docs/a.txt" && scope == "docs"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            BackendEvent::PreviewReconcileFinished { change_id, success: true, .. }
+                if change_id == "upload-new:docs/a.txt"
+        )));
+    }
+}

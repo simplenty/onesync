@@ -3,6 +3,7 @@ mod app;
 mod config;
 mod onedrive;
 mod settings;
+mod sync;
 mod transfer;
 mod utils;
 

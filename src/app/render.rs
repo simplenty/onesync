@@ -1,12 +1,15 @@
 use super::{
+    account_label,
     events::{active_operation, is_monitor_running, is_sync_running},
     layout::{ACCOUNT_CONTEXT_MENU_WIDTH, build_profile_context_popover},
-    open_sync_dir_for_account, start_monitor_for_account, start_one_time_sync_for_account,
+    load_sync_mode_for_selected_profile, open_sync_dir_for_account, start_monitor_for_account,
+    start_one_time_sync_for_account,
     state::{ActiveOperation, AppState},
-    status::{account_label, status_detail, status_label, status_title},
+    status_detail, status_label, status_title,
     widgets::set_command_button_content,
 };
 use crate::account::{Account, AccountStatus};
+use crate::sync::{ControlInput, RuntimeState, controls_for};
 use adw::prelude::*;
 use std::rc::Rc;
 
@@ -90,6 +93,7 @@ pub(in crate::app) fn build_profile_row(
     click.connect_pressed(move |_, _, x, y| {
         click_state.selected_index.set(index);
         click_state.profile_list.select_row(Some(&click_row));
+        load_sync_mode_for_selected_profile(&click_state);
         refresh_content(&click_state);
         let click_bounds =
             gtk::gdk::Rectangle::new(x as i32, y as i32, ACCOUNT_CONTEXT_MENU_WIDTH, 1);
@@ -108,8 +112,9 @@ pub(in crate::app) fn refresh_content(state: &AppState) {
         state.status_title.set_label("未配置");
         state.status_detail.set_label("添加账号后开始认证");
         state.account_menu_button.set_sensitive(false);
-        state.one_time_sync_button.set_sensitive(false);
-        state.monitor_button.set_sensitive(false);
+        state.sync_button.set_sensitive(false);
+        state.preview_button.set_sensitive(false);
+        state.preview_button.set_visible(true);
         state.edit_button.set_sensitive(false);
         state.transfers.clear();
         return;
@@ -123,66 +128,56 @@ pub(in crate::app) fn refresh_content(state: &AppState) {
     let client_ready = state.client_check.borrow().is_ready();
     let operation = active_operation(state, &account.id);
     let stopping_sync = matches!(operation, Some(ActiveOperation::StoppingSync));
+    let stopping_preview = matches!(operation, Some(ActiveOperation::StoppingPreview));
     let stopping_monitor = matches!(operation, Some(ActiveOperation::StoppingMonitor));
     let syncing =
         matches!(account.status, AccountStatus::Syncing) || is_sync_running(state, &account.id);
     let monitoring = matches!(account.status, AccountStatus::Monitoring)
         || is_monitor_running(state, &account.id);
 
-    if stopping_sync {
-        set_command_button_content(
-            &state.one_time_sync_button,
-            "process-stop-symbolic",
-            "正在停止",
-        );
-        state.one_time_sync_button.set_sensitive(false);
+    let runtime = if matches!(operation, Some(ActiveOperation::Preview)) {
+        RuntimeState::Previewing
+    } else if stopping_sync {
+        RuntimeState::StoppingSync
+    } else if stopping_preview {
+        RuntimeState::StoppingPreview
+    } else if stopping_monitor {
+        RuntimeState::StoppingMonitor
     } else if syncing {
-        set_command_button_content(
-            &state.one_time_sync_button,
-            "process-stop-symbolic",
-            "停止同步",
-        );
-        state.one_time_sync_button.set_sensitive(true);
+        RuntimeState::OneTimeSyncing
+    } else if monitoring {
+        RuntimeState::Monitoring
+    } else if operation.is_some() {
+        RuntimeState::Blocked
     } else {
-        set_command_button_content(
-            &state.one_time_sync_button,
-            "view-refresh-symbolic",
-            "一次同步",
-        );
-        state.one_time_sync_button.set_sensitive(
-            client_ready
-                && operation.is_none()
-                && matches!(account.status, AccountStatus::Authenticated),
-        );
-    }
+        RuntimeState::Idle
+    };
+    let controls = controls_for(ControlInput {
+        mode: state.selected_sync_mode.get(),
+        runtime,
+        authenticated: matches!(
+            account.status,
+            AccountStatus::Authenticated | AccountStatus::Monitoring | AccountStatus::Syncing
+        ),
+        client_ready,
+    });
 
-    state.monitor_button.set_sensitive(
-        !stopping_monitor
-            && matches!(
-                account.status,
-                AccountStatus::Authenticated | AccountStatus::Monitoring
-            )
-            && (client_ready || monitoring)
-            && (operation.is_none() || monitoring),
+    state.sync_button.set_visible(controls.sync.visible);
+    state.sync_button.set_sensitive(controls.sync.sensitive);
+    set_command_button_content(&state.sync_button, controls.sync.icon, controls.sync.label);
+    state.preview_button.set_visible(controls.preview.visible);
+    state
+        .preview_button
+        .set_sensitive(controls.preview.sensitive);
+    set_command_button_content(
+        &state.preview_button,
+        controls.preview.icon,
+        controls.preview.label,
     );
     state.edit_button.set_sensitive(true);
-    if matches!(account.status, AccountStatus::Monitoring) {
-        set_command_button_content(
-            &state.monitor_button,
-            "media-playback-stop-symbolic",
-            "停止持续同步",
-        );
-    } else if stopping_monitor {
-        set_command_button_content(&state.monitor_button, "process-stop-symbolic", "正在停止");
-    } else {
-        set_command_button_content(
-            &state.monitor_button,
-            "media-playback-start-symbolic",
-            "持续同步",
-        );
-    }
 }
 
 pub(in crate::app) fn show_toast(state: &AppState, message: &str) {
+    state.toast_overlay.dismiss_all();
     state.toast_overlay.add_toast(adw::Toast::new(message));
 }

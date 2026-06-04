@@ -1,5 +1,5 @@
 use super::{
-    profile,
+    load_sync_mode_for_selected_profile, profile,
     render::refresh_content,
     state::AppState,
     widgets::{command_button, set_menu_button_content},
@@ -17,8 +17,9 @@ pub(in crate::app) struct ContentWidgets {
     pub(in crate::app) files_list: gtk::ListBox,
     pub(in crate::app) account_menu_button: gtk::MenuButton,
     pub(in crate::app) settings_button: gtk::Button,
-    pub(in crate::app) one_time_sync_button: gtk::Button,
-    pub(in crate::app) monitor_button: gtk::Button,
+    pub(in crate::app) mode_dropdown: gtk::DropDown,
+    pub(in crate::app) sync_button: gtk::Button,
+    pub(in crate::app) preview_button: gtk::Button,
     pub(in crate::app) edit_button: gtk::Button,
 }
 
@@ -56,6 +57,7 @@ pub(in crate::app) fn build_sidebar(state: Rc<AppState>) -> adw::ToolbarView {
         let next_index = row.index() as usize;
         let changed_account = select_state.selected_index.get() != next_index;
         select_state.selected_index.set(next_index);
+        load_sync_mode_for_selected_profile(&select_state);
         refresh_content(&select_state);
         if changed_account {
             select_state.transfers.clear();
@@ -126,11 +128,15 @@ pub(in crate::app) fn build_content_widgets() -> (adw::ToolbarView, ContentWidge
         .orientation(gtk::Orientation::Horizontal)
         .spacing(12)
         .build();
-    let one_time_sync_button = command_button("view-refresh-symbolic", "一次同步");
-    let monitor_button = command_button("media-playback-start-symbolic", "持续同步");
+    let mode_dropdown = gtk::DropDown::from_strings(&["手动模式", "自动模式"]);
+    mode_dropdown.set_selected(crate::sync::SyncMode::Manual.dropdown_index());
+    mode_dropdown.set_tooltip_text(Some("选择自动同步或手动同步"));
+    let sync_button = command_button("view-refresh-symbolic", "同步");
+    let preview_button = command_button("view-list-symbolic", "预览");
     let edit_button = command_button("document-edit-symbolic", "编辑账户");
-    actions.append(&one_time_sync_button);
-    actions.append(&monitor_button);
+    actions.append(&mode_dropdown);
+    actions.append(&sync_button);
+    actions.append(&preview_button);
 
     let account_menu_button = gtk::MenuButton::builder()
         .icon_name("view-more-symbolic")
@@ -171,8 +177,9 @@ pub(in crate::app) fn build_content_widgets() -> (adw::ToolbarView, ContentWidge
             files_list,
             account_menu_button,
             settings_button,
-            one_time_sync_button,
-            monitor_button,
+            mode_dropdown,
+            sync_button,
+            preview_button,
             edit_button,
         },
     )

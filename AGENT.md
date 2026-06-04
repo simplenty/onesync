@@ -12,6 +12,18 @@
 - 保持 `AGENT.md` 为仓库级唯一项目/产品/Agent 说明；不要再新增独立的 `PROJECT.md`、`PRODUCT.md` 或同类重复说明文件。
 - 本文件描述代码当前真实行为，不描述愿景、计划或已废弃实现。
 
+## 必用 Skill
+
+- 本仓库提供可随时查阅的项目本地 skill：`.agents/skills/onesync-onedrive-reference/SKILL.md`。
+- 当需要确认上游 OneDriveGUI 或 abraunegg `onedrive` CLI 的行为时，优先使用该 skill，而不是凭记忆推断。
+- 适用场景包括：多账号/profile 行为、认证流程、`--sync`、`--monitor`、`--dry-run`、`--confdir`、配置项、SharePoint/shared libraries、进程输出语义、安全确认和同步决策。
+- 该 skill 是只读参考资料；除非用户明确要求更新 skill archive，不要修改 `.agents/skills/onesync-onedrive-reference/references/` 下的归档内容。
+- 从 skill 得到的结论必须适配 OneSync 当前 Rust/GTK 架构，不要直接搬运上游 GUI 或 CLI 代码。
+- 修改、评审或重构任何 Rust 代码时，必须使用 `rust-skills` 作为基础质量约束，重点检查 ownership/borrowing、错误处理、类型安全、测试覆盖和不必要 clone/分配。
+- 修改 GTK4/libadwaita UI、窗口、widget、状态管理、主线程事件、后台线程回传或界面架构时，必须使用 `rust-gtk4-expert`。
+- `rust-gtk4-expert` 的约束优先覆盖 UI 层实现：不得阻塞 GTK 主线程，GTK widget 只能在主线程操作，跨线程工作必须通过后端事件或 GLib 主线程调度回到 UI。
+- 当 Rust 通用建议与 GTK/libadwaita 实践产生取舍时，以 Rust 安全性和 GTK 主线程正确性为硬约束，再按 OneSync 现有 `src/app/` 架构做最小一致改动。
+
 ## 产品定位
 
 OneSync 是围绕 `onedrive` CLI 构建的 GTK/libadwaita Linux 桌面应用。它让用户通过图形界面管理一个或多个 Microsoft OneDrive 同步 profile，完成账号添加、认证、状态查看、一次同步、持续同步和账号维护等日常操作。
@@ -144,6 +156,71 @@ OneSync 的 UI 应当像一个可靠的系统工具：克制、直接、可预�
 - 输出以 `done.`、`done` 结尾，或包含 ` ... done` 时，状态为 `<动作>完成`，进度为 `1.0`。
 - 输出包含百分比时，百分比转换为 `0.0..=1.0` 的进度。
 - 其他已识别但未完成的行状态为 `正在<动作>`，默认进度为 `0.0`。
+
+### onedrive CLI 输出样本
+
+样本来源：
+
+- 真实测试：2026-06-03 使用 `onedrive v2.5.10-1+np1+1.3`、OneSync profile `massey-1780217306`、同步目录 `~/Massey OneDrive`，在隔离目录 `onesync-agent-output-20260603-163850` 中执行 `--sync --verbose --single-directory`、`--download-file` 和 `--remove-directory`。
+- 参考样本：`.agents/skills/onesync-onedrive-reference/references/upstream/OneDriveCLI/client-architecture.md` 与 `business-shared-items.md` 中保存的 abraunegg `onedrive` CLI 文档输出。
+
+真实传输输出：
+
+```text
+Uploading new file: onesync-agent-output-20260603-163850/upload-new.txt ... done
+Uploading modified file: onesync-agent-output-20260603-163850/upload-new.txt ... done
+Uploading new file: onesync-agent-output-20260603-163850/download-source.txt ... done
+Downloading file: onesync-agent-output-20260603-163850/download-source.txt ... done
+Deleting item from Microsoft OneDrive: onesync-agent-output-20260603-163850/upload-new.txt
+Deleting item from Microsoft OneDrive: onesync-agent-output-20260603-163850/download-source.txt
+```
+
+真实传输辅助输出，不应解析为文件传输：
+
+```text
+Processing: onesync-agent-output-20260603-163850/upload-new.txt
+Local file time discrepancy detected: onesync-agent-output-20260603-163850/upload-new.txt
+Transfer Metrics - File: onesync-agent-output-20260603-163850/upload-new.txt | Size: 69 Bytes | Duration: 0.99 Seconds | Speed: 0.00 Mbps (approx)
+The requested directory to delete was found on OneDrive - attempting deletion
+The requested directory to delete online has been deleted
+Sync with Microsoft OneDrive is complete
+```
+
+上游文档中出现的下载输出变体：
+
+```text
+Downloading file ./1.txt ... done
+Downloading file: ./file to share.docx.url ... done
+Downloading file: my_shared_folder/my_folder/file_one.txt ... done
+Downloading file: Files Shared With Me/test user (testuser@mynasau3.onmicrosoft.com)/file to share.docx ... done
+Downloading file: Files Shared With Me/test user (testuser@mynasau3.onmicrosoft.com)/no_download_access.docx ... failed!
+```
+
+上游文档中出现的上传输出变体：
+
+```text
+Uploading new file ./1-onedrive-client-dev.txt ... done.
+Uploading new file 1-onedrive-client-dev.txt ... done.
+Uploading new file: onesync-agent-output-20260603-163850/upload-new.txt ... done
+Uploading modified file: onesync-agent-output-20260603-163850/upload-new.txt ... done
+```
+
+OneSync 测试中保留的进度输出变体：
+
+```text
+Uploading: ./.onesync-progress-test/upload-progress.bin ... 37%  |  ETA    00:00:10
+Uploading: ./.onesync-progress-test/upload-progress.bin ... 37.5%  |  ETA    00:00:10
+Uploading: ./.onesync-progress-test/upload-progress.bin
+```
+
+模式匹配约束：
+
+- 只把行首明确是传输动作的输出解析成 `SyncFile`；`Processing:`、`Transfer Metrics - File:`、状态总结、目录删除确认和扫描输出都必须忽略。
+- `Downloading file` 需要同时兼容有冒号和无冒号形式：`Downloading file: path ... done`、`Downloading file ./1.txt ... done`。
+- `Uploading new file` 和 `Uploading modified file` 需要同时兼容有冒号和无冒号形式，且 `done` 可能是 `done` 或 `done.`。
+- `Deleting item from Microsoft OneDrive:` 是真实同步删除远端文件的输出，没有 `done` 后缀，应直接视为完成。
+- `failed!` 和 ` ... failed` 应优先于 `done` 判断，避免把失败下载误判为完成。
+- 带百分比的行应从 `%` 前向后解析最后一个数字片段，兼容整数和小数百分比。
 
 ## 配置逻辑
 

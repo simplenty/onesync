@@ -57,6 +57,31 @@ pub fn start_account_identity_lookup(account: Account, sender: mpsc::Sender<Back
 }
 
 fn fetch_account_identity(account: &Account) -> io::Result<AccountIdentity> {
+    let access_token = graph_access_token(account)?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(io::Error::other)?;
+
+    let drive = client
+        .get("https://graph.microsoft.com/v1.0/me/drive?$select=owner")
+        .bearer_auth(access_token)
+        .send()
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .map_err(io::Error::other)?
+        .json::<DriveResponse>()
+        .map_err(io::Error::other)?;
+
+    let user = drive.owner.and_then(|owner| owner.user);
+    Ok(AccountIdentity {
+        display_name: user
+            .as_ref()
+            .and_then(|user| non_empty(user.display_name.as_deref())),
+        email: user.and_then(|user| non_empty(user.email.as_deref())),
+    })
+}
+
+pub(crate) fn graph_access_token(account: &Account) -> io::Result<String> {
     let refresh_token = fs::read_to_string(Path::new(&account.config_dir).join("refresh_token"))?;
     let refresh_token = refresh_token.trim();
     if refresh_token.is_empty() {
@@ -73,7 +98,7 @@ fn fetch_account_identity(account: &Account) -> io::Result<AccountIdentity> {
         .build()
         .map_err(io::Error::other)?;
 
-    let token = client
+    client
         .post("https://login.microsoftonline.com/common/oauth2/v2.0/token")
         .form(&[
             ("client_id", application_id.as_str()),
@@ -86,24 +111,8 @@ fn fetch_account_identity(account: &Account) -> io::Result<AccountIdentity> {
         .and_then(reqwest::blocking::Response::error_for_status)
         .map_err(io::Error::other)?
         .json::<TokenResponse>()
-        .map_err(io::Error::other)?;
-
-    let drive = client
-        .get("https://graph.microsoft.com/v1.0/me/drive?$select=owner")
-        .bearer_auth(token.access_token)
-        .send()
-        .and_then(reqwest::blocking::Response::error_for_status)
-        .map_err(io::Error::other)?
-        .json::<DriveResponse>()
-        .map_err(io::Error::other)?;
-
-    let user = drive.owner.and_then(|owner| owner.user);
-    Ok(AccountIdentity {
-        display_name: user
-            .as_ref()
-            .and_then(|user| non_empty(user.display_name.as_deref())),
-        email: user.and_then(|user| non_empty(user.email.as_deref())),
-    })
+        .map(|token| token.access_token)
+        .map_err(io::Error::other)
 }
 
 fn application_id(config_dir: &str) -> Option<String> {

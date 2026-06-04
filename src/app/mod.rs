@@ -6,16 +6,19 @@ mod list;
 mod profile;
 mod render;
 mod state;
-mod status;
 mod widgets;
 
 use crate::{
     account::{Account, AccountStatus, is_authenticated, load_store, save_accounts},
     onedrive::{
-        ClientCheck, check_client, start_account_identity_lookup, start_forced_sync, start_monitor,
-        start_sync,
+        ClientCheck, check_client, start_account_identity_lookup, start_apply_preview_change,
+        start_forced_sync, start_monitor, start_preview, start_sync,
     },
-    settings::{DEFAULT_ONEDRIVE_COMMAND, load_onedrive_command},
+    settings::{
+        DEFAULT_ONEDRIVE_COMMAND, load_onedrive_command, load_profile_sync_mode,
+        save_profile_sync_mode,
+    },
+    sync::SyncMode,
 };
 use adw::prelude::*;
 use events::{
@@ -98,6 +101,8 @@ fn build_ui(app: &adw::Application) {
         syncs: RefCell::new(HashMap::new()),
         monitors: RefCell::new(HashMap::new()),
         active_operations: RefCell::new(HashMap::new()),
+        previews: RefCell::new(HashMap::new()),
+        applying_preview_changes: RefCell::new(std::collections::HashSet::new()),
         toast_overlay: toast_overlay.clone(),
         window: window.clone(),
         profile_list,
@@ -107,13 +112,17 @@ fn build_ui(app: &adw::Application) {
         transfers: TransferList::new(content_widgets.files_list),
         account_menu_button: content_widgets.account_menu_button,
         settings_button: content_widgets.settings_button,
-        one_time_sync_button: content_widgets.one_time_sync_button,
-        monitor_button: content_widgets.monitor_button,
+        mode_dropdown: content_widgets.mode_dropdown,
+        selected_sync_mode: Cell::new(SyncMode::Manual),
+        updating_sync_mode_dropdown: Cell::new(false),
+        sync_button: content_widgets.sync_button,
+        preview_button: content_widgets.preview_button,
         edit_button: content_widgets.edit_button,
     });
 
     let sidebar = build_sidebar(Rc::clone(&state));
     connect_actions(Rc::clone(&state));
+    connect_preview_row_actions(Rc::clone(&state));
     connect_shutdown(Rc::clone(&state));
     refresh_accounts_from_disk(&state);
     rebuild_profile_list(&state);
@@ -136,22 +145,46 @@ fn build_ui(app: &adw::Application) {
 fn connect_actions(state: Rc<AppState>) {
     state.settings_button.connect_clicked(|_| {});
 
-    let one_time_sync_state = Rc::clone(&state);
-    state.one_time_sync_button.connect_clicked(move |_| {
-        let Some(account) = one_time_sync_state.selected_account() else {
-            show_toast(&one_time_sync_state, "请先选择账号");
+    let mode_state = Rc::clone(&state);
+    state
+        .mode_dropdown
+        .connect_selected_notify(move |dropdown| {
+            if mode_state.updating_sync_mode_dropdown.get() {
+                return;
+            }
+            let mode = SyncMode::from_dropdown_index(dropdown.selected());
+            mode_state.selected_sync_mode.set(mode);
+            if let Some(account_id) = mode_state.selected_account_id()
+                && let Err(error) = save_profile_sync_mode(&account_id, mode)
+            {
+                show_toast(&mode_state, &format!("保存同步模式失败: {error}"));
+            }
+            refresh_content(&mode_state);
+        });
+
+    let sync_state = Rc::clone(&state);
+    state.sync_button.connect_clicked(move |_| {
+        let Some(account) = sync_state.selected_account() else {
+            show_toast(&sync_state, "请先选择账号");
             return;
         };
-        start_one_time_sync_for_account(Rc::clone(&one_time_sync_state), account);
+        match sync_state.selected_sync_mode.get() {
+            SyncMode::Automatic => {
+                start_or_stop_auto_sync_for_account(Rc::clone(&sync_state), account)
+            }
+            SyncMode::Manual => {
+                start_or_stop_manual_one_time_sync_for_account(Rc::clone(&sync_state), account)
+            }
+        }
     });
 
-    let monitor_state = Rc::clone(&state);
-    state.monitor_button.connect_clicked(move |_| {
-        let Some(account) = monitor_state.selected_account() else {
-            show_toast(&monitor_state, "请先选择账号");
+    let preview_state = Rc::clone(&state);
+    state.preview_button.connect_clicked(move |_| {
+        let Some(account) = preview_state.selected_account() else {
+            show_toast(&preview_state, "请先选择账号");
             return;
         };
-        start_monitor_for_account(Rc::clone(&monitor_state), account);
+        start_or_stop_preview_for_account(Rc::clone(&preview_state), account);
     });
 
     let edit_state = Rc::clone(&state);
@@ -166,7 +199,49 @@ fn connect_actions(state: Rc<AppState>) {
 }
 
 pub(in crate::app) fn start_one_time_sync_for_account(state: Rc<AppState>, account: Account) {
+    start_manual_one_time_sync_for_account(state, account);
+}
+
+pub(in crate::app) fn load_sync_mode_for_selected_profile(state: &AppState) {
+    let mode = state
+        .selected_account_id()
+        .map(|account_id| {
+            load_profile_sync_mode(&account_id).unwrap_or_else(|error| {
+                show_toast(state, &format!("读取同步模式失败: {error}"));
+                SyncMode::Manual
+            })
+        })
+        .unwrap_or(SyncMode::Manual);
+    state.selected_sync_mode.set(mode);
+    state.updating_sync_mode_dropdown.set(true);
+    state.mode_dropdown.set_selected(mode.dropdown_index());
+    state.updating_sync_mode_dropdown.set(false);
+}
+
+pub(in crate::app) fn start_manual_one_time_sync_for_account(
+    state: Rc<AppState>,
+    account: Account,
+) {
     start_one_time_sync(state, account, false);
+}
+
+pub(in crate::app) fn start_or_stop_manual_one_time_sync_for_account(
+    state: Rc<AppState>,
+    account: Account,
+) {
+    if is_sync_running(&state, &account.id) {
+        stop_sync(&state, &account.id, ActiveOperation::StoppingSync, "停止");
+    } else {
+        start_manual_one_time_sync_for_account(state, account);
+    }
+}
+
+pub(in crate::app) fn start_or_stop_auto_sync_for_account(state: Rc<AppState>, account: Account) {
+    if is_monitor_running(&state, &account.id) {
+        stop_monitor(&state, &account.id);
+    } else {
+        start_monitor_for_account(state, account);
+    }
 }
 
 pub(in crate::app) fn start_forced_one_time_sync_for_account(
@@ -178,7 +253,7 @@ pub(in crate::app) fn start_forced_one_time_sync_for_account(
 
 fn start_one_time_sync(state: Rc<AppState>, account: Account, force_big_delete: bool) {
     if is_sync_running(&state, &account.id) {
-        stop_sync(&state, &account.id);
+        show_toast(&state, "同步正在运行，请等待完成");
         return;
     }
     if !is_authenticated(&account) {
@@ -221,6 +296,130 @@ fn start_one_time_sync(state: Rc<AppState>, account: Account, force_big_delete: 
             );
         }
     }
+}
+
+pub(in crate::app) fn start_preview_for_account(state: Rc<AppState>, account: Account) {
+    if !is_authenticated(&account) {
+        show_toast(&state, "账号尚未完成认证");
+        return;
+    }
+    if !ensure_client_ready(&state) {
+        return;
+    }
+    if has_active_operation(&state, &account.id) {
+        show_active_operation_toast(&state, &account.id);
+        return;
+    }
+    if is_sync_running(&state, &account.id) || is_monitor_running(&state, &account.id) {
+        show_toast(&state, "同步运行中，不能同时预览");
+        return;
+    }
+    if !begin_active_operation(&state, &account.id, ActiveOperation::Preview) {
+        return;
+    }
+
+    state.previews.borrow_mut().remove(&account.id);
+    state.transfers.clear();
+    refresh_content(&state);
+
+    match start_preview(
+        account.clone(),
+        onedrive_command(&state),
+        state.sender.clone(),
+    ) {
+        Ok(handle) => {
+            state.syncs.borrow_mut().insert(account.id.clone(), handle);
+        }
+        Err(error) => {
+            finish_active_operation(&state, &account.id);
+            show_toast(&state, &format!("启动预览失败: {error}"));
+        }
+    }
+}
+
+pub(in crate::app) fn start_or_stop_preview_for_account(state: Rc<AppState>, account: Account) {
+    if matches!(
+        state.active_operations.borrow().get(&account.id),
+        Some(ActiveOperation::Preview)
+    ) && is_sync_running(&state, &account.id)
+    {
+        stop_sync(
+            &state,
+            &account.id,
+            ActiveOperation::StoppingPreview,
+            "停止",
+        );
+    } else {
+        start_preview_for_account(state, account);
+    }
+}
+
+fn connect_preview_row_actions(state: Rc<AppState>) {
+    let accept_state = Rc::clone(&state);
+    state
+        .transfers
+        .connect_preview_accept(move |account_id, change_id| {
+            apply_preview_change(Rc::clone(&accept_state), &account_id, &change_id);
+        });
+
+    let dismiss_state = Rc::clone(&state);
+    state
+        .transfers
+        .connect_preview_dismiss(move |account_id, change_id| {
+            if let Some(previews) = dismiss_state.previews.borrow_mut().get_mut(&account_id) {
+                previews.remove(&change_id);
+            }
+            dismiss_state
+                .transfers
+                .dismiss_preview(&account_id, &change_id);
+            show_toast(&dismiss_state, "已放弃该变更");
+        });
+}
+
+fn apply_preview_change(state: Rc<AppState>, account_id: &str, change_id: &str) {
+    let Some(account) = account_by_id(&state, account_id) else {
+        show_toast(&state, "该账号已不存在");
+        return;
+    };
+    let applying_key = (account_id.to_string(), change_id.to_string());
+    if state
+        .applying_preview_changes
+        .borrow()
+        .contains(&applying_key)
+    {
+        show_toast(&state, "该变更正在应用");
+        return;
+    }
+    let Some(change) = state
+        .previews
+        .borrow()
+        .get(account_id)
+        .and_then(|previews| previews.get(change_id))
+        .cloned()
+    else {
+        show_toast(&state, "该预览变更已不存在");
+        return;
+    };
+    state
+        .applying_preview_changes
+        .borrow_mut()
+        .insert(applying_key);
+    state.transfers.mark_preview_applying(account_id, change_id);
+    start_apply_preview_change(
+        account,
+        change,
+        onedrive_command(&state),
+        state.sender.clone(),
+    );
+}
+
+fn account_by_id(state: &AppState, account_id: &str) -> Option<Account> {
+    state
+        .accounts
+        .borrow()
+        .iter()
+        .find(|account| account.id == account_id)
+        .cloned()
 }
 
 pub(in crate::app) fn start_monitor_for_account(state: Rc<AppState>, account: Account) {
@@ -361,4 +560,45 @@ fn needs_identity_lookup(account: &Account) -> bool {
 
 pub(in crate::app) fn onedrive_command(state: &AppState) -> String {
     state.onedrive_command.clone()
+}
+
+pub(in crate::app) fn status_title(status: &AccountStatus) -> &'static str {
+    match status {
+        AccountStatus::NeedsAuth => "需要认证",
+        AccountStatus::Authenticating => "认证中",
+        AccountStatus::Authenticated => "已认证",
+        AccountStatus::Syncing => "同步中",
+        AccountStatus::Monitoring => "持续同步中",
+        AccountStatus::Error(_) => "需要处理",
+    }
+}
+
+pub(in crate::app) fn status_label(status: &AccountStatus) -> &str {
+    match status {
+        AccountStatus::NeedsAuth => "未认证",
+        AccountStatus::Authenticating => "认证中",
+        AccountStatus::Authenticated => "已认证",
+        AccountStatus::Syncing => "同步中",
+        AccountStatus::Monitoring => "持续同步中",
+        AccountStatus::Error(message) => message.as_str(),
+    }
+}
+
+pub(in crate::app) fn status_detail(account: &Account) -> String {
+    match &account.status {
+        AccountStatus::NeedsAuth => format!("配置目录: {}", account.config_dir),
+        AccountStatus::Authenticating => "打开认证链接，登录后粘贴 redirect URI".to_string(),
+        AccountStatus::Authenticated => format!("同步目录: {}", account.sync_dir),
+        AccountStatus::Syncing => "正在执行一次同步".to_string(),
+        AccountStatus::Monitoring => "正在持续监听本地和远端变化".to_string(),
+        AccountStatus::Error(message) => format!("最近错误: {message}"),
+    }
+}
+
+pub(in crate::app) fn account_label(account: &Account) -> String {
+    if account.email.trim().is_empty() {
+        account.id.clone()
+    } else {
+        account.email.clone()
+    }
 }
