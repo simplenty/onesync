@@ -1,14 +1,15 @@
 use super::{
-    event::{BackendEvent, ClientCheck, Version},
+    command::{add_single_directory_scope, build_command, OneDriveCommandKind},
     output::{
         combined_output, is_auth_required, parse_confirmation, parse_onedrive_error, parse_version,
     },
 };
 use crate::{
-    account::{Account, auth_response_path, auth_url_path, is_authenticated},
-    config::ensure_transfer_metrics_enabled,
-    transfer::{parse_preview_line, parse_transfer_line},
+    event::{BackendEvent, ClientCheck, Version},
+    profile::{Account, auth_response_path, auth_url_path, is_authenticated},
+    profile::config::ensure_transfer_metrics_enabled,
 };
+use super::parse::{parse_file_change_line, parse_preview_change_line};
 use std::{
     fs,
     io::{self, BufReader, Read},
@@ -153,13 +154,7 @@ pub fn start_preview(
 ) -> io::Result<SyncHandle> {
     ensure_transfer_metrics_enabled(&account.config_dir)?;
 
-    let mut child = Command::new(binary)
-        .arg("--confdir")
-        .arg(&account.config_dir)
-        .arg("--sync")
-        .arg("--verbose")
-        .arg("--local-first")
-        .arg("--dry-run")
+    let mut child = build_command(binary, &account, OneDriveCommandKind::Preview)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -215,16 +210,7 @@ fn start_sync_with_force(
 ) -> io::Result<SyncHandle> {
     ensure_transfer_metrics_enabled(&account.config_dir)?;
 
-    let mut command = Command::new(binary);
-    command
-        .arg("--confdir")
-        .arg(&account.config_dir)
-        .arg("--sync")
-        .arg("--verbose");
-    if force {
-        command.arg("--force");
-    }
-    let mut child = command
+    let mut child = build_command(binary, &account, OneDriveCommandKind::Sync { force })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -281,11 +267,7 @@ pub fn start_monitor(
 ) -> io::Result<MonitorHandle> {
     ensure_transfer_metrics_enabled(&account.config_dir)?;
 
-    let mut child = Command::new(binary)
-        .arg("--confdir")
-        .arg(&account.config_dir)
-        .arg("--monitor")
-        .arg("--verbose")
+    let mut child = build_command(binary, &account, OneDriveCommandKind::Monitor)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -359,17 +341,8 @@ pub fn reconcile_preview_change(
 ) -> io::Result<String> {
     ensure_transfer_metrics_enabled(&account.config_dir)?;
 
-    let mut command = Command::new(binary);
-    command
-        .arg("--confdir")
-        .arg(&account.config_dir)
-        .arg("--sync")
-        .arg("--verbose");
-
-    if let Some(scope) = single_directory_scope(path) {
-        command.arg("--single-directory").arg(scope);
-    }
-
+    let mut command = build_command(binary, account, OneDriveCommandKind::ReconcileSync);
+    add_single_directory_scope(&mut command, path);
     run_reconcile_command(command)
 }
 
@@ -378,27 +351,9 @@ pub fn display_reconcile_status(
     binary: String,
     path: &str,
 ) -> io::Result<String> {
-    let mut command = Command::new(binary);
-    command
-        .arg("--confdir")
-        .arg(&account.config_dir)
-        .arg("--display-sync-status");
-
-    if let Some(scope) = single_directory_scope(path) {
-        command.arg("--single-directory").arg(scope);
-    }
-
+    let mut command = build_command(binary, account, OneDriveCommandKind::DisplaySyncStatus);
+    add_single_directory_scope(&mut command, path);
     run_reconcile_command(command)
-}
-
-fn single_directory_scope(path: &str) -> Option<String> {
-    let normalized = path.trim_start_matches("./").trim_matches('/');
-    let (parent, _) = normalized.rsplit_once('/')?;
-    if parent.is_empty() {
-        None
-    } else {
-        Some(parent.to_string())
-    }
 }
 
 fn run_reconcile_command(mut command: Command) -> io::Result<String> {
@@ -421,9 +376,6 @@ pub fn stop_handle(handle: &SyncHandle) -> io::Result<()> {
     terminate_child(&mut child)
 }
 
-pub fn stop_monitor_handle(handle: &MonitorHandle) -> io::Result<()> {
-    stop_handle(handle)
-}
 
 fn wait_for_child(child: &Arc<Mutex<Child>>) -> io::Result<bool> {
     loop {
@@ -542,7 +494,7 @@ fn send_transfer_chunk(
     }
     match mode {
         OutputMode::Live => {
-            if let Some(file) = parse_transfer_line(line) {
+            if let Some(file) = parse_file_change_line(line) {
                 let _ = sender.send(BackendEvent::TransferEvent {
                     account_id: account_id.to_string(),
                     file,
@@ -550,7 +502,7 @@ fn send_transfer_chunk(
             }
         }
         OutputMode::Preview => {
-            if let Some(change) = parse_preview_line(line) {
+            if let Some(change) = parse_preview_change_line(line) {
                 let _ = sender.send(BackendEvent::PreviewEvent {
                     account_id: account_id.to_string(),
                     change,
@@ -609,7 +561,7 @@ mod tests {
 
     #[cfg(unix)]
     fn test_account() -> Account {
-        use crate::account::AccountStatus;
+        use crate::profile::AccountStatus;
         use std::{
             env,
             time::{SystemTime, UNIX_EPOCH},
@@ -639,7 +591,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn sync_handle_can_stop_running_sync() {
-        use crate::account::AccountStatus;
+        use crate::profile::AccountStatus;
         use std::{
             env,
             os::unix::fs::PermissionsExt,
@@ -698,7 +650,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn forced_sync_passes_force_flag_to_onedrive() {
-        use crate::account::AccountStatus;
+        use crate::profile::AccountStatus;
         use std::{
             env,
             os::unix::fs::PermissionsExt,
@@ -760,7 +712,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn preview_sync_passes_dry_run_flag_to_onedrive() {
-        use crate::account::AccountStatus;
+        use crate::profile::AccountStatus;
         use std::{
             env,
             os::unix::fs::PermissionsExt,
@@ -833,7 +785,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn preview_handle_reports_requested_stop() {
-        use crate::account::AccountStatus;
+        use crate::profile::AccountStatus;
         use std::{
             env,
             os::unix::fs::PermissionsExt,

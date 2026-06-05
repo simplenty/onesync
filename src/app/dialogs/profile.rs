@@ -1,17 +1,17 @@
-use super::{
+use super::super::{
     account_label,
-    auth::show_auth_dialog,
-    can_mutate_profile, load_sync_mode_for_selected_profile,
+    dialogs::auth::show_auth_dialog,
+    actions::load_sync_mode_for_selected_profile, can_mutate_profile,
     render::{rebuild_profile_list, refresh_content, show_toast},
     state::AppState,
     status_label,
     widgets::form_row,
 };
-use crate::account::{
+use crate::profile::{
     Account, create_account, remove_confirmation_matches, save_accounts, suggested_account_name,
     suggested_sync_dir,
 };
-use crate::settings::remove_profile_sync_mode;
+use crate::profile::remove_profile_sync_mode;
 use adw::prelude::*;
 use gtk::Align;
 use std::{cell::Cell, rc::Rc};

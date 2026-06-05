@@ -1,7 +1,8 @@
-use super::{event::BackendEvent, identity::graph_access_token};
+use super::identity::graph_access_token;
+use crate::event::BackendEvent;
 use crate::{
-    account::Account,
-    transfer::{PreviewApply, PreviewChange},
+    profile::Account,
+    event::payload::{PreviewAction, PreviewChange},
     utils::expand_home,
 };
 use reqwest::blocking::{Client, Response};
@@ -64,15 +65,15 @@ fn apply_preview_change(
         .map_err(io::Error::other)?;
 
     match change.apply {
-        PreviewApply::UploadLocalToRemote => {
+        PreviewAction::UploadLocalToRemote => {
             upload_local_file(&client, &access_token, account, change, sender)
         }
-        PreviewApply::DownloadRemoteToLocal => {
+        PreviewAction::DownloadRemoteToLocal => {
             download_remote_file(&client, &access_token, account, change, sender)
         }
-        PreviewApply::DeleteRemote => delete_remote_item(&client, &access_token, &change.path),
-        PreviewApply::DeleteLocal => delete_local_item(account, &change.path),
-        PreviewApply::MoveRemoteItem | PreviewApply::RenameRemoteItem => {
+        PreviewAction::DeleteRemote => delete_remote_item(&client, &access_token, &change.path),
+        PreviewAction::DeleteLocal => delete_local_item(account, &change.path),
+        PreviewAction::MoveRemoteItem | PreviewAction::RenameRemoteItem => {
             move_remote_item(&client, &access_token, change)
         }
     }
@@ -91,8 +92,8 @@ fn finish_graph_apply_with_reconcile(
         scope: scope.clone(),
     });
 
-    let reconcile = super::process::reconcile_preview_change(account, binary.clone(), &change.path)
-        .and_then(|_| super::process::display_reconcile_status(account, binary, &change.path));
+    let reconcile = crate::adapter::onedrive::reconcile_preview_change(account, binary.clone(), &change.path)
+        .and_then(|_| crate::adapter::onedrive::display_reconcile_status(account, binary, &change.path));
 
     let success = reconcile.is_ok();
     let message = reconcile
@@ -457,11 +458,8 @@ fn split_parent_and_name(path: &str) -> (String, String) {
 mod tests {
     use super::*;
     use crate::{
-        account::{Account, AccountStatus},
-        transfer::{
-            PreviewBasis, PreviewConfidence, PreviewIntent, PreviewState, TransferDirection,
-            TransferKind,
-        },
+        profile::{Account, AccountStatus},
+        event::payload::{ChangeDirection, ChangeKind, PreviewIntent, PreviewState},
     };
     use std::{fs, io::Cursor, sync::mpsc};
 
@@ -530,20 +528,16 @@ mod tests {
         }
     }
 
-    fn preview_change(path: &str, apply: PreviewApply) -> PreviewChange {
+    fn preview_change(path: &str, apply: PreviewAction) -> PreviewChange {
         PreviewChange {
             id: format!("upload-new:{path}"),
             path: path.to_string(),
             source_path: None,
-            kind: TransferKind::UploadNew,
-            direction: TransferDirection::LocalToRemote,
+            kind: ChangeKind::UploadNew,
+            direction: ChangeDirection::LocalToRemote,
             apply,
             intent: PreviewIntent::LocalChangeToRemote,
-            basis: PreviewBasis::CliDryRun,
-            confidence: PreviewConfidence::Exact,
             state: PreviewState::Pending,
-            description: "将上传到 OneDrive".to_string(),
-            icon: "go-up-symbolic",
         }
     }
 
@@ -609,7 +603,7 @@ mod tests {
             "Sync with Microsoft OneDrive is complete\nThe directory is in sync\n",
             0,
         );
-        let change = preview_change("docs/a.txt", PreviewApply::UploadLocalToRemote);
+        let change = preview_change("docs/a.txt", PreviewAction::UploadLocalToRemote);
 
         finish_graph_apply_with_reconcile(
             &account,

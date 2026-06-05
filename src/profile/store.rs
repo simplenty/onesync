@@ -1,5 +1,5 @@
 use crate::{
-    config::{ConfigEdit, OneDriveConfig},
+    profile::config::{ConfigEdit, OneDriveConfig},
     utils::{config_root, expand_home, unix_timestamp},
 };
 use serde::{Deserialize, Serialize};
@@ -11,10 +11,7 @@ use std::{
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AccountStatus {
     NeedsAuth,
-    Authenticating,
     Authenticated,
-    Syncing,
-    Monitoring,
     Error(String),
 }
 

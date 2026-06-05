@@ -1,5 +1,5 @@
-use super::event::BackendEvent;
-use crate::account::Account;
+use crate::event::BackendEvent;
+use crate::profile::Account;
 use serde::Deserialize;
 use std::{fs, io, path::Path, sync::mpsc, thread, time::Duration};
 

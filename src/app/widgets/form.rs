@@ -1,6 +1,6 @@
 use gtk::{Align, prelude::*};
 
-pub(super) fn form_row(label: &str, entry: &gtk::Entry) -> gtk::Box {
+pub(in crate::app) fn form_row(label: &str, entry: &gtk::Entry) -> gtk::Box {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(12)
@@ -16,13 +16,13 @@ pub(super) fn form_row(label: &str, entry: &gtk::Entry) -> gtk::Box {
     row
 }
 
-pub(super) fn command_button(icon_name: &str, label: &str) -> gtk::Button {
+pub(in crate::app) fn command_button(icon_name: &str, label: &str) -> gtk::Button {
     let button = gtk::Button::new();
     set_command_button_content(&button, icon_name, label);
     button
 }
 
-pub(super) fn set_command_button_content(button: &gtk::Button, icon_name: &str, label: &str) {
+pub(in crate::app) fn set_command_button_content(button: &gtk::Button, icon_name: &str, label: &str) {
     let content = adw::ButtonContent::builder()
         .icon_name(icon_name)
         .label(label)
@@ -31,7 +31,7 @@ pub(super) fn set_command_button_content(button: &gtk::Button, icon_name: &str, 
     button.set_child(Some(&content));
 }
 
-pub(super) fn set_menu_button_content(button: &gtk::Button, icon_name: &str, label: &str) {
+pub(in crate::app) fn set_menu_button_content(button: &gtk::Button, icon_name: &str, label: &str) {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(10)

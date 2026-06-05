@@ -1,15 +1,16 @@
 use super::{
     account_label,
-    events::{active_operation, is_monitor_running, is_sync_running},
+    events::operation,
     layout::{ACCOUNT_CONTEXT_MENU_WIDTH, build_profile_context_popover},
-    load_sync_mode_for_selected_profile, open_sync_dir_for_account, start_monitor_for_account,
-    start_one_time_sync_for_account,
-    state::{ActiveOperation, AppState},
+    actions::{open_sync_dir_for_account, start_monitor_for_account, start_one_time_sync_for_account},
+    actions::load_sync_mode_for_selected_profile,
+    state::AppState,
     status_detail, status_label, status_title,
     widgets::set_command_button_content,
 };
-use crate::account::{Account, AccountStatus};
-use crate::sync::{ControlInput, RuntimeState, controls_for};
+use crate::profile::{Account, AccountStatus};
+use crate::operation::{OperationKind, OperationPhase};
+use crate::operation::{CommandRuntime, ControlInput, controls_for};
 use adw::prelude::*;
 use std::rc::Rc;
 
@@ -126,39 +127,26 @@ pub(in crate::app) fn refresh_content(state: &AppState) {
     state.status_title.set_label(status_title(&account.status));
     state.status_detail.set_label(&status_detail(&account));
     let client_ready = state.client_check.borrow().is_ready();
-    let operation = active_operation(state, &account.id);
-    let stopping_sync = matches!(operation, Some(ActiveOperation::StoppingSync));
-    let stopping_preview = matches!(operation, Some(ActiveOperation::StoppingPreview));
-    let stopping_monitor = matches!(operation, Some(ActiveOperation::StoppingMonitor));
-    let syncing =
-        matches!(account.status, AccountStatus::Syncing) || is_sync_running(state, &account.id);
-    let monitoring = matches!(account.status, AccountStatus::Monitoring)
-        || is_monitor_running(state, &account.id);
-
-    let runtime = if matches!(operation, Some(ActiveOperation::Preview)) {
-        RuntimeState::Previewing
-    } else if stopping_sync {
-        RuntimeState::StoppingSync
-    } else if stopping_preview {
-        RuntimeState::StoppingPreview
-    } else if stopping_monitor {
-        RuntimeState::StoppingMonitor
-    } else if syncing {
-        RuntimeState::OneTimeSyncing
-    } else if monitoring {
-        RuntimeState::Monitoring
-    } else if operation.is_some() {
-        RuntimeState::Blocked
-    } else {
-        RuntimeState::Idle
+    let runtime = match operation(state, &account.id) {
+        Some(operation) => match (operation.kind, operation.phase) {
+            (OperationKind::OneTimeSync, OperationPhase::Running) => {
+                CommandRuntime::RunningManualSync
+            }
+            (OperationKind::OneTimeSync, OperationPhase::Stopping) => {
+                CommandRuntime::StoppingManualSync
+            }
+            (OperationKind::Preview, OperationPhase::Running) => CommandRuntime::RunningPreview,
+            (OperationKind::Preview, OperationPhase::Stopping) => CommandRuntime::StoppingPreview,
+            (OperationKind::Monitor, OperationPhase::Running) => CommandRuntime::RunningMonitor,
+            (OperationKind::Monitor, OperationPhase::Stopping) => CommandRuntime::StoppingMonitor,
+            (OperationKind::Authentication | OperationKind::ApplyPreviewChange | OperationKind::Reconcile, _) => CommandRuntime::Blocked,
+        },
+        None => CommandRuntime::Idle,
     };
     let controls = controls_for(ControlInput {
         mode: state.selected_sync_mode.get(),
         runtime,
-        authenticated: matches!(
-            account.status,
-            AccountStatus::Authenticated | AccountStatus::Monitoring | AccountStatus::Syncing
-        ),
+        authenticated: matches!(account.status, AccountStatus::Authenticated),
         client_ready,
     });
 

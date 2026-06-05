@@ -1,10 +1,8 @@
-mod account;
+mod adapter;
 mod app;
-mod config;
-mod onedrive;
-mod settings;
-mod sync;
-mod transfer;
+mod event;
+mod operation;
+mod profile;
 mod utils;
 
 fn main() -> gtk::glib::ExitCode {

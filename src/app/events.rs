@@ -1,15 +1,14 @@
 use super::{
-    auth, confirm,
+    dialogs::{auth, confirm},
     render::{rebuild_profile_list, refresh_content, show_toast},
-    state::{ActiveOperation, AppState},
+    state::AppState,
     status_label, update_account_status,
 };
 use crate::{
-    account::{Account, AccountStatus, save_accounts},
-    onedrive::{
-        BackendEvent, ConfirmationKind, MonitorHandle, SyncHandle, start_account_identity_lookup,
-        stop_handle, stop_monitor_handle,
-    },
+    adapter::{graph::start_account_identity_lookup, onedrive::{OperationHandle, stop_operation}},
+    event::{BackendEvent, ConfirmationKind},
+    operation::{AccountOperation, OperationKind, OperationPhase},
+    profile::{Account, AccountStatus, save_accounts},
 };
 use adw::prelude::*;
 use gtk::glib;
@@ -60,7 +59,7 @@ fn drain_backend_events(state: &Rc<AppState>) {
                 success,
                 message,
             } => {
-                finish_active_operation(state, &account_id);
+                finish_operation(state, &account_id);
                 let status = if success {
                     AccountStatus::Authenticated
                 } else {
@@ -121,8 +120,8 @@ fn drain_backend_events(state: &Rc<AppState>) {
                 message,
                 requires_confirmation,
             } => {
-                state.syncs.borrow_mut().remove(&account_id);
-                finish_active_operation(state, &account_id);
+                state.operation_handles.borrow_mut().remove(&account_id);
+                finish_operation(state, &account_id);
                 if auth_required {
                     handle_auth_required(Rc::clone(state), &account_id, message);
                     continue;
@@ -173,8 +172,8 @@ fn drain_backend_events(state: &Rc<AppState>) {
                 message,
                 requires_confirmation,
             } => {
-                state.syncs.borrow_mut().remove(&account_id);
-                finish_active_operation(state, &account_id);
+                state.operation_handles.borrow_mut().remove(&account_id);
+                finish_operation(state, &account_id);
                 if auth_required {
                     handle_auth_required(Rc::clone(state), &account_id, message);
                     continue;
@@ -271,8 +270,8 @@ fn drain_backend_events(state: &Rc<AppState>) {
                 message,
                 requires_confirmation,
             } => {
-                state.monitors.borrow_mut().remove(&account_id);
-                finish_active_operation(state, &account_id);
+                state.operation_handles.borrow_mut().remove(&account_id);
+                finish_operation(state, &account_id);
                 if auth_required {
                     handle_auth_required(Rc::clone(state), &account_id, message);
                     continue;
@@ -297,24 +296,15 @@ fn drain_backend_events(state: &Rc<AppState>) {
     }
 }
 
-pub(super) fn stop_sync(
-    state: &AppState,
-    account_id: &str,
-    operation: ActiveOperation,
-    message: &str,
-) {
-    let Some(handle) = state.syncs.borrow().get(account_id).cloned() else {
+pub(super) fn stop_sync(state: &AppState, account_id: &str, message: &str) {
+    let Some(handle) = state.operation_handles.borrow().get(account_id).cloned() else {
         show_toast(state, "同步未运行");
         return;
     };
 
-    state
-        .active_operations
-        .borrow_mut()
-        .insert(account_id.to_string(), operation);
-    refresh_content(state);
-    if let Err(error) = stop_handle(&handle) {
-        finish_active_operation(state, account_id);
+    mark_stopping(state, account_id);
+    if let Err(error) = stop_operation(&handle) {
+        finish_operation(state, account_id);
         show_toast(state, &format!("{message}失败: {error}"));
     }
 }
@@ -331,85 +321,80 @@ fn handle_confirmation_required(state: Rc<AppState>, account_id: &str, kind: Con
 }
 
 pub(super) fn stop_monitor(state: &AppState, account_id: &str) {
-    let Some(handle) = state.monitors.borrow().get(account_id).cloned() else {
+    let Some(handle) = state.operation_handles.borrow().get(account_id).cloned() else {
         show_toast(state, "持续同步未运行");
         return;
     };
 
-    state
-        .active_operations
-        .borrow_mut()
-        .insert(account_id.to_string(), ActiveOperation::StoppingMonitor);
-    refresh_content(state);
-    if let Err(error) = stop_monitor_handle(&handle) {
-        finish_active_operation(state, account_id);
+    mark_stopping(state, account_id);
+    if let Err(error) = stop_operation(&handle) {
+        finish_operation(state, account_id);
         show_toast(state, &format!("停止持续同步失败: {error}"));
     }
 }
 
 pub(super) fn stop_all_monitors(state: &AppState) {
-    let sync_handles: Vec<SyncHandle> = state.syncs.borrow().values().cloned().collect();
+    let sync_handles: Vec<OperationHandle> = state.operation_handles.borrow().values().cloned().collect();
     for handle in sync_handles {
-        let _ = stop_handle(&handle);
+        let _ = stop_operation(&handle);
     }
-    let handles: Vec<MonitorHandle> = state.monitors.borrow().values().cloned().collect();
+    let handles: Vec<OperationHandle> = state.operation_handles.borrow().values().cloned().collect();
     for handle in handles {
-        let _ = stop_monitor_handle(&handle);
+        let _ = stop_operation(&handle);
     }
 }
 
 pub(super) fn is_monitor_running(state: &AppState, account_id: &str) -> bool {
-    state.monitors.borrow().contains_key(account_id)
+    matches!(operation(state, account_id).map(|operation| operation.kind), Some(OperationKind::Monitor))
 }
 
 pub(super) fn is_sync_running(state: &AppState, account_id: &str) -> bool {
-    state.syncs.borrow().contains_key(account_id)
+    matches!(operation(state, account_id).map(|operation| operation.kind), Some(OperationKind::OneTimeSync | OperationKind::Preview))
 }
 
-pub(super) fn has_active_operation(state: &AppState, account_id: &str) -> bool {
-    state.active_operations.borrow().contains_key(account_id)
-}
-
-pub(super) fn active_operation(state: &AppState, account_id: &str) -> Option<ActiveOperation> {
-    state.active_operations.borrow().get(account_id).copied()
+pub(super) fn operation(state: &AppState, account_id: &str) -> Option<AccountOperation> {
+    state.operations.borrow().get(account_id).copied()
 }
 
 pub(super) fn can_mutate_profile(state: &AppState, account: &Account) -> bool {
-    !matches!(
-        account.status,
-        AccountStatus::Authenticating | AccountStatus::Syncing | AccountStatus::Monitoring
-    ) && !has_active_operation(state, &account.id)
+    !state.operations.borrow().contains_key(&account.id)
         && !is_sync_running(state, &account.id)
         && !is_monitor_running(state, &account.id)
 }
 
-pub(super) fn begin_active_operation(
-    state: &AppState,
-    account_id: &str,
-    operation: ActiveOperation,
-) -> bool {
-    if state.active_operations.borrow().contains_key(account_id) {
-        show_active_operation_toast(state, account_id);
+pub(super) fn begin_operation(state: &AppState, account_id: &str, kind: OperationKind) -> bool {
+    if state.operations.borrow().contains_key(account_id) {
+        show_operation_toast(state, account_id);
         return false;
     }
-    state
-        .active_operations
-        .borrow_mut()
-        .insert(account_id.to_string(), operation);
+    state.operations.borrow_mut().insert(
+        account_id.to_string(),
+        AccountOperation {
+            kind,
+            phase: OperationPhase::Running,
+        },
+    );
     refresh_content(state);
     true
 }
 
-pub(super) fn finish_active_operation(state: &AppState, account_id: &str) {
-    state.active_operations.borrow_mut().remove(account_id);
+pub(super) fn mark_stopping(state: &AppState, account_id: &str) {
+    if let Some(operation) = state.operations.borrow_mut().get_mut(account_id) {
+        operation.phase = OperationPhase::Stopping;
+    }
     refresh_content(state);
 }
 
-pub(super) fn show_active_operation_toast(state: &AppState, account_id: &str) {
-    let operation = state.active_operations.borrow().get(account_id).copied();
-    let message = operation.map_or("该账户正在运行操作".to_string(), |operation| {
-        format!("该账户正在执行{}", operation.label())
-    });
+pub(super) fn finish_operation(state: &AppState, account_id: &str) {
+    state.operations.borrow_mut().remove(account_id);
+    refresh_content(state);
+}
+
+pub(super) fn show_operation_toast(state: &AppState, account_id: &str) {
+    let message = operation(state, account_id)
+        .map_or("该账户正在运行操作".to_string(), |operation| {
+            format!("该账户正在执行{}", operation.label())
+        });
     show_toast(state, &message);
 }
 

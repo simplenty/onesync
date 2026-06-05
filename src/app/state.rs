@@ -1,9 +1,11 @@
-use super::list::TransferList;
+use super::widgets::TransferList;
 use crate::{
-    account::Account,
-    onedrive::{BackendEvent, ClientCheck, MonitorHandle, SyncHandle},
-    sync::SyncMode,
-    transfer::PreviewChange,
+    profile::Account,
+    operation::AccountOperation,
+    adapter::onedrive::OperationHandle,
+    event::{BackendEvent, ClientCheck},
+    profile::SyncMode,
+    event::payload::PreviewChange,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -20,9 +22,8 @@ pub(in crate::app) struct AppState {
     pub(in crate::app) sender: mpsc::Sender<BackendEvent>,
     pub(in crate::app) receiver: RefCell<mpsc::Receiver<BackendEvent>>,
     pub(in crate::app) auth_panel: RefCell<Option<AuthPanel>>,
-    pub(in crate::app) syncs: RefCell<HashMap<String, SyncHandle>>,
-    pub(in crate::app) monitors: RefCell<HashMap<String, MonitorHandle>>,
-    pub(in crate::app) active_operations: RefCell<HashMap<String, ActiveOperation>>,
+    pub(in crate::app) operation_handles: RefCell<HashMap<String, OperationHandle>>,
+    pub(in crate::app) operations: RefCell<HashMap<String, AccountOperation>>,
     pub(in crate::app) previews: RefCell<HashMap<String, HashMap<String, PreviewChange>>>,
     pub(in crate::app) applying_preview_changes: RefCell<HashSet<(String, String)>>,
     pub(in crate::app) toast_overlay: adw::ToastOverlay,
@@ -68,27 +69,4 @@ pub(in crate::app) struct AuthPanel {
     pub(in crate::app) copy_auth_url_button: gtk::Button,
     pub(in crate::app) finish_button: gtk::Button,
     pub(in crate::app) close_blocked: Rc<Cell<bool>>,
-}
-
-#[derive(Clone, Copy)]
-pub(in crate::app) enum ActiveOperation {
-    Authentication,
-    Sync,
-    StoppingSync,
-    StoppingPreview,
-    StoppingMonitor,
-    Preview,
-}
-
-impl ActiveOperation {
-    pub(in crate::app) fn label(self) -> &'static str {
-        match self {
-            Self::Authentication => "认证",
-            Self::Sync => "一次同步",
-            Self::StoppingSync => "停止",
-            Self::StoppingPreview => "停止",
-            Self::StoppingMonitor => "停止持续同步",
-            Self::Preview => "预览",
-        }
-    }
 }

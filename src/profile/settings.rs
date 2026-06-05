@@ -1,9 +1,34 @@
-use crate::{sync::SyncMode, utils::config_root};
+use crate::utils::config_root;
 use serde_json::{Map, Value};
 use std::{fs, io};
 
 pub const DEFAULT_ONEDRIVE_COMMAND: &str = "onedrive";
 const PROFILE_SYNC_MODES_KEY: &str = "profile_sync_modes";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncMode {
+    Automatic,
+    Manual,
+}
+
+impl SyncMode {
+    #[must_use]
+    pub fn from_dropdown_index(index: u32) -> Self {
+        match index {
+            0 => Self::Manual,
+            1 => Self::Automatic,
+            _ => Self::Manual,
+        }
+    }
+
+    #[must_use]
+    pub fn dropdown_index(self) -> u32 {
+        match self {
+            Self::Manual => 0,
+            Self::Automatic => 1,
+        }
+    }
+}
 
 pub fn load_onedrive_command() -> io::Result<String> {
     let value = load_settings_value()?;

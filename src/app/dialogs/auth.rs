@@ -1,13 +1,13 @@
-use super::{
-    begin_active_operation, close_auth_panel, onedrive_command,
+use super::super::{
+    begin_operation, close_auth_panel, onedrive_command,
     render::show_toast,
-    state::{ActiveOperation, AppState, AuthPanel},
-    update_account_status,
+    state::{AppState, AuthPanel},
     widgets::form_row,
 };
+use crate::operation::OperationKind;
 use crate::{
-    account::{Account, AccountStatus, auth_response_path},
-    onedrive::start_authentication,
+    adapter::onedrive::start_authentication,
+    profile::{Account, auth_response_path},
 };
 use adw::prelude::*;
 use gtk::{Align, glib};
@@ -204,11 +204,10 @@ fn start_authentication_flow(
         show_toast(&state, &format!("无法创建配置目录: {error}"));
         return;
     }
-    if !begin_active_operation(&state, &account.id, ActiveOperation::Authentication) {
+    if !begin_operation(&state, &account.id, OperationKind::Authentication) {
         return;
     }
 
-    update_account_status(&state, &account.id, AccountStatus::Authenticating);
     auth_url_entry.set_text("");
     auth_response_entry.set_text("");
     status_label.set_label("正在生成认证链接");

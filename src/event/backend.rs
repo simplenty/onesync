@@ -1,4 +1,4 @@
-use crate::transfer::{PreviewChange, SyncFile};
+use crate::event::payload::{FileChange, PreviewChange};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Version {
@@ -67,7 +67,7 @@ pub enum BackendEvent {
     },
     TransferEvent {
         account_id: String,
-        file: SyncFile,
+        file: FileChange,
     },
     PreviewEvent {
         account_id: String,
@@ -117,7 +117,7 @@ pub enum BackendEvent {
     },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfirmationKind {
     ResyncRequired,
     BigDelete,

@@ -1,4 +1,4 @@
-use crate::transfer::{PreviewChange, PreviewConfidence, PreviewState, SyncFile};
+use crate::event::payload::{PreviewChange, PreviewState, FileChange};
 use gtk::{Align, prelude::*};
 use std::{
     cell::{Cell, RefCell},
@@ -40,7 +40,7 @@ struct PreviewRow {
     state: Cell<PreviewState>,
 }
 
-pub(super) struct TransferList {
+pub(in crate::app) struct TransferList {
     list: gtk::ListBox,
     rows: RefCell<HashMap<String, ListRow>>,
     next_order: Cell<u64>,
@@ -49,7 +49,7 @@ pub(super) struct TransferList {
 }
 
 impl TransferList {
-    pub(super) fn new(list: gtk::ListBox) -> Self {
+    pub(in crate::app) fn new(list: gtk::ListBox) -> Self {
         Self {
             list,
             rows: RefCell::new(HashMap::new()),
@@ -59,7 +59,7 @@ impl TransferList {
         }
     }
 
-    pub(super) fn clear(&self) {
+    pub(in crate::app) fn clear(&self) {
         while let Some(child) = self.list.first_child() {
             self.list.remove(&child);
         }
@@ -67,7 +67,7 @@ impl TransferList {
         self.next_order.set(0);
     }
 
-    pub(super) fn upsert(&self, file: SyncFile) {
+    pub(in crate::app) fn upsert(&self, file: FileChange) {
         let completed = file.is_complete();
         if let Some(ListRow::Live(row)) = self.rows.borrow().get(&file.name).cloned() {
             let progress = if file.is_failed() {
@@ -103,10 +103,10 @@ impl TransferList {
         self.reorder();
     }
 
-    pub(super) fn upsert_preview(&self, account_id: String, change: PreviewChange) {
+    pub(in crate::app) fn upsert_preview(&self, account_id: String, change: PreviewChange) {
         let key = preview_row_key(&account_id, &change.id);
         if let Some(ListRow::Preview(row)) = self.rows.borrow().get(&key).cloned() {
-            row.state_label.set_label(&change.description);
+            row.state_label.set_label(change.description());
             row.state.set(change.state);
             self.reorder();
             return;
@@ -138,7 +138,7 @@ impl TransferList {
         self.reorder();
     }
 
-    pub(super) fn mark_preview_applying(&self, account_id: &str, change_id: &str) {
+    pub(in crate::app) fn mark_preview_applying(&self, account_id: &str, change_id: &str) {
         let key = preview_row_key(account_id, change_id);
         if let Some(ListRow::Preview(row)) = self.rows.borrow().get(&key).cloned() {
             row.state.set(PreviewState::Applying);
@@ -148,7 +148,7 @@ impl TransferList {
         }
     }
 
-    pub(super) fn mark_preview_progress(&self, account_id: &str, change_id: &str, progress: f64) {
+    pub(in crate::app) fn mark_preview_progress(&self, account_id: &str, change_id: &str, progress: f64) {
         let key = preview_row_key(account_id, change_id);
         if let Some(ListRow::Preview(row)) = self.rows.borrow().get(&key).cloned() {
             row.state.set(PreviewState::Applying);
@@ -163,7 +163,7 @@ impl TransferList {
         }
     }
 
-    pub(super) fn mark_preview_reconciling(&self, account_id: &str, change_id: &str) {
+    pub(in crate::app) fn mark_preview_reconciling(&self, account_id: &str, change_id: &str) {
         let key = preview_row_key(account_id, change_id);
         if let Some(ListRow::Preview(row)) = self.rows.borrow().get(&key).cloned() {
             row.state.set(PreviewState::Reconciling);
@@ -174,14 +174,14 @@ impl TransferList {
         }
     }
 
-    pub(super) fn mark_preview_applied(&self, account_id: &str, change_id: &str) {
+    pub(in crate::app) fn mark_preview_applied(&self, account_id: &str, change_id: &str) {
         let key = preview_row_key(account_id, change_id);
         if let Some(ListRow::Preview(row)) = self.rows.borrow_mut().remove(&key) {
             self.list.remove(&row.list_row);
         }
     }
 
-    pub(super) fn mark_preview_failed(&self, account_id: &str, change_id: &str, message: &str) {
+    pub(in crate::app) fn mark_preview_failed(&self, account_id: &str, change_id: &str, message: &str) {
         let key = preview_row_key(account_id, change_id);
         if let Some(ListRow::Preview(row)) = self.rows.borrow().get(&key).cloned() {
             if matches!(row.state.get(), PreviewState::ReconcileFailed) {
@@ -195,7 +195,7 @@ impl TransferList {
         }
     }
 
-    pub(super) fn mark_preview_reconcile_failed(
+    pub(in crate::app) fn mark_preview_reconcile_failed(
         &self,
         account_id: &str,
         change_id: &str,
@@ -211,21 +211,21 @@ impl TransferList {
         }
     }
 
-    pub(super) fn dismiss_preview(&self, account_id: &str, change_id: &str) {
+    pub(in crate::app) fn dismiss_preview(&self, account_id: &str, change_id: &str) {
         let key = preview_row_key(account_id, change_id);
         if let Some(ListRow::Preview(row)) = self.rows.borrow_mut().remove(&key) {
             self.list.remove(&row.list_row);
         }
     }
 
-    pub(super) fn connect_preview_accept<F>(&self, callback: F)
+    pub(in crate::app) fn connect_preview_accept<F>(&self, callback: F)
     where
         F: Fn(String, String) + 'static,
     {
         self.accept_preview.replace(Some(Rc::new(callback)));
     }
 
-    pub(super) fn connect_preview_dismiss<F>(&self, callback: F)
+    pub(in crate::app) fn connect_preview_dismiss<F>(&self, callback: F)
     where
         F: Fn(String, String) + 'static,
     {
@@ -255,7 +255,7 @@ fn preview_row_key(account_id: &str, change_id: &str) -> String {
     format!("preview:{account_id}:{change_id}")
 }
 
-fn build_file_row(file: SyncFile) -> (gtk::ListBoxRow, TransferRow) {
+fn build_file_row(file: FileChange) -> (gtk::ListBoxRow, TransferRow) {
     let list_row = gtk::ListBoxRow::new();
 
     let row_box = gtk::Box::builder()
@@ -330,7 +330,7 @@ fn build_preview_row(change: PreviewChange) -> (gtk::ListBoxRow, PreviewRow) {
         .margin_end(12)
         .build();
 
-    let icon = gtk::Image::from_icon_name(change.icon);
+    let icon = gtk::Image::from_icon_name(change.icon_name());
     icon.set_valign(Align::Center);
 
     let text_box = gtk::Box::builder()
@@ -341,18 +341,18 @@ fn build_preview_row(change: PreviewChange) -> (gtk::ListBoxRow, PreviewRow) {
     text_box.set_size_request(FILE_COLUMN_WIDTH, -1);
 
     let name = gtk::Label::builder()
-        .label(change.path)
+        .label(&change.path)
         .halign(Align::Start)
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .build();
-    let state_text = if matches!(change.confidence, PreviewConfidence::Ambiguous) {
+    let state_text = if change.needs_confirmation() {
         format!(
             "{} · {} · 需要确认",
             change.intent.label(),
-            change.description
+            change.description()
         )
     } else {
-        format!("{} · {}", change.intent.label(), change.description)
+        format!("{} · {}", change.intent.label(), change.description())
     };
     let state = gtk::Label::builder()
         .label(state_text)

@@ -1,4 +1,4 @@
-use super::event::{ConfirmationKind, Version};
+use crate::event::{ConfirmationKind, Version};
 
 pub(super) fn parse_version(output: &str) -> Option<Version> {
     let (_, version) = output.split_once("onedrive")?;
@@ -53,8 +53,13 @@ pub(super) fn is_auth_required(output: &str) -> bool {
     lower.contains("login required")
         || lower.contains("authorise this application")
         || lower.contains("authorize this application")
+        || lower.contains("re-authorise")
+        || lower.contains("re-authorize")
+        || lower.contains("fresh auth token")
+        || lower.contains("provided grant has expired")
         || lower.contains("refresh_token is invalid")
         || lower.contains("refresh token is invalid")
+        || lower.contains("reauthenticate")
         || lower.contains("reauth")
 }
 
@@ -79,7 +84,9 @@ fn is_resync_confirmation(lower: &str) -> bool {
         line.contains("--resync")
             && (line.contains("required")
                 || line.contains("must be used")
-                || line.contains("use --resync"))
+                || line.contains("use --resync")
+                || line.contains("wish to proceed")
+                || line.contains("asked the client to perform"))
     })
 }
 
@@ -87,6 +94,9 @@ fn is_big_delete_confirmation(lower: &str) -> bool {
     lower.lines().any(|line| {
         let line = line.trim();
         line.contains("big delete detected")
+            || (line.contains("big delete")
+                && line.contains("detected")
+                && (line.contains("--force") || line.contains("force")))
             || line.contains("attempt to remove a large volume of data from onedrive")
             || (line.contains("to delete a large volume of data")
                 && line.contains("--force")
@@ -98,8 +108,11 @@ fn is_download_only_cleanup_confirmation(lower: &str) -> bool {
     lower.lines().any(|line| {
         let line = line.trim();
         line.contains("download-only")
-            && line.contains("cleanup")
+            && (line.contains("cleanup") || line.contains("clean up"))
             && (line.contains("warning") || line.contains("risk") || line.contains("cannot"))
+            || (line.contains("download-only")
+                && line.contains("remove local data")
+                && (line.contains("cleanup") || line.contains("clean up")))
     })
 }
 
@@ -154,6 +167,12 @@ mod tests {
             "To authorise this application open the URL"
         ));
         assert!(is_auth_required("ERROR: refresh_token is invalid"));
+        assert!(is_auth_required(
+            "ERROR: You will need to issue a --reauth and re-authorise this client to obtain a fresh auth token."
+        ));
+        assert!(is_auth_required(
+            "AADSTS50173: The provided grant has expired due to it being revoked"
+        ));
     }
 
     #[test]
@@ -163,7 +182,21 @@ mod tests {
             Some(ConfirmationKind::ResyncRequired)
         ));
         assert!(matches!(
+            parse_confirmation("Are you sure you wish to proceed with --resync? [Y/N]"),
+            Some(ConfirmationKind::ResyncRequired)
+        ));
+        assert!(matches!(
+            parse_confirmation(
+                "WARNING: You have asked the client to perform a --resync operation."
+            ),
+            Some(ConfirmationKind::ResyncRequired)
+        ));
+        assert!(matches!(
             parse_confirmation("ERROR: big delete detected"),
+            Some(ConfirmationKind::BigDelete)
+        ));
+        assert!(matches!(
+            parse_confirmation("ERROR: Big Delete detected; rerun with --force to continue"),
             Some(ConfirmationKind::BigDelete)
         ));
         assert!(matches!(
@@ -174,6 +207,12 @@ mod tests {
         ));
         assert!(matches!(
             parse_confirmation("download-only cleanup warning"),
+            Some(ConfirmationKind::DownloadOnlyCleanup)
+        ));
+        assert!(matches!(
+            parse_confirmation(
+                "Clean up additional local files when using --download-only. This will remove local data"
+            ),
             Some(ConfirmationKind::DownloadOnlyCleanup)
         ));
         assert!(matches!(

@@ -1,35 +1,12 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SyncMode {
-    Automatic,
-    Manual,
-}
-
-impl SyncMode {
-    #[must_use]
-    pub fn from_dropdown_index(index: u32) -> Self {
-        match index {
-            0 => Self::Manual,
-            1 => Self::Automatic,
-            _ => Self::Manual,
-        }
-    }
-
-    #[must_use]
-    pub fn dropdown_index(self) -> u32 {
-        match self {
-            Self::Manual => 0,
-            Self::Automatic => 1,
-        }
-    }
-}
+use crate::profile::SyncMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeState {
+pub enum CommandRuntime {
     Idle,
-    OneTimeSyncing,
-    Monitoring,
-    Previewing,
-    StoppingSync,
+    RunningManualSync,
+    RunningPreview,
+    RunningMonitor,
+    StoppingManualSync,
     StoppingPreview,
     StoppingMonitor,
     Blocked,
@@ -38,7 +15,7 @@ pub enum RuntimeState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ControlInput {
     pub mode: SyncMode,
-    pub runtime: RuntimeState,
+    pub runtime: CommandRuntime,
     pub authenticated: bool,
     pub client_ready: bool,
 }
@@ -60,22 +37,22 @@ pub struct ControlButtons {
 #[must_use]
 pub fn controls_for(input: ControlInput) -> ControlButtons {
     let can_start =
-        input.authenticated && input.client_ready && matches!(input.runtime, RuntimeState::Idle);
+        input.authenticated && input.client_ready && matches!(input.runtime, CommandRuntime::Idle);
     match input.mode {
         SyncMode::Automatic => automatic_controls(input.runtime, can_start),
         SyncMode::Manual => manual_controls(input.runtime, can_start),
     }
 }
 
-fn automatic_controls(runtime: RuntimeState, can_start: bool) -> ControlButtons {
+fn automatic_controls(runtime: CommandRuntime, can_start: bool) -> ControlButtons {
     let sync = match runtime {
-        RuntimeState::Monitoring => CommandButtonModel {
+        CommandRuntime::RunningMonitor => CommandButtonModel {
             visible: true,
             sensitive: true,
             icon: "media-playback-stop-symbolic",
             label: "停止",
         },
-        RuntimeState::StoppingMonitor => CommandButtonModel {
+        CommandRuntime::StoppingMonitor => CommandButtonModel {
             visible: true,
             sensitive: false,
             icon: "process-stop-symbolic",
@@ -99,15 +76,15 @@ fn automatic_controls(runtime: RuntimeState, can_start: bool) -> ControlButtons 
     }
 }
 
-fn manual_controls(runtime: RuntimeState, can_start: bool) -> ControlButtons {
+fn manual_controls(runtime: CommandRuntime, can_start: bool) -> ControlButtons {
     let sync = match runtime {
-        RuntimeState::OneTimeSyncing => CommandButtonModel {
+        CommandRuntime::RunningManualSync => CommandButtonModel {
             visible: true,
             sensitive: true,
             icon: "media-playback-stop-symbolic",
             label: "停止",
         },
-        RuntimeState::StoppingSync => CommandButtonModel {
+        CommandRuntime::StoppingManualSync => CommandButtonModel {
             visible: true,
             sensitive: false,
             icon: "process-stop-symbolic",
@@ -121,19 +98,19 @@ fn manual_controls(runtime: RuntimeState, can_start: bool) -> ControlButtons {
         },
     };
     let preview = match runtime {
-        RuntimeState::Previewing => CommandButtonModel {
+        CommandRuntime::RunningPreview => CommandButtonModel {
             visible: true,
             sensitive: true,
             icon: "media-playback-stop-symbolic",
             label: "停止",
         },
-        RuntimeState::StoppingSync => CommandButtonModel {
+        CommandRuntime::StoppingManualSync => CommandButtonModel {
             visible: true,
             sensitive: false,
             icon: "view-list-symbolic",
             label: "预览",
         },
-        RuntimeState::StoppingPreview => CommandButtonModel {
+        CommandRuntime::StoppingPreview => CommandButtonModel {
             visible: true,
             sensitive: false,
             icon: "process-stop-symbolic",
@@ -153,7 +130,7 @@ fn manual_controls(runtime: RuntimeState, can_start: bool) -> ControlButtons {
 mod tests {
     use super::*;
 
-    fn ready(mode: SyncMode, runtime: RuntimeState) -> ControlInput {
+    fn ready(mode: SyncMode, runtime: CommandRuntime) -> ControlInput {
         ControlInput {
             mode,
             runtime,
@@ -164,7 +141,7 @@ mod tests {
 
     #[test]
     fn automatic_idle_shows_single_start_button_and_no_preview() {
-        let controls = controls_for(ready(SyncMode::Automatic, RuntimeState::Idle));
+        let controls = controls_for(ready(SyncMode::Automatic, CommandRuntime::Idle));
 
         assert_eq!(controls.sync.label, "自动同步");
         assert_eq!(controls.sync.icon, "media-playback-start-symbolic");
@@ -175,7 +152,7 @@ mod tests {
 
     #[test]
     fn automatic_monitoring_turns_sync_button_into_stop_button() {
-        let controls = controls_for(ready(SyncMode::Automatic, RuntimeState::Monitoring));
+        let controls = controls_for(ready(SyncMode::Automatic, CommandRuntime::RunningMonitor));
 
         assert_eq!(controls.sync.label, "停止");
         assert_eq!(controls.sync.icon, "media-playback-stop-symbolic");
@@ -185,7 +162,7 @@ mod tests {
 
     #[test]
     fn manual_idle_shows_sync_and_preview_buttons() {
-        let controls = controls_for(ready(SyncMode::Manual, RuntimeState::Idle));
+        let controls = controls_for(ready(SyncMode::Manual, CommandRuntime::Idle));
 
         assert_eq!(controls.sync.label, "同步");
         assert_eq!(controls.preview.label, "预览");
@@ -197,7 +174,7 @@ mod tests {
 
     #[test]
     fn manual_one_time_syncing_turns_sync_button_into_stop_button() {
-        let controls = controls_for(ready(SyncMode::Manual, RuntimeState::OneTimeSyncing));
+        let controls = controls_for(ready(SyncMode::Manual, CommandRuntime::RunningManualSync));
 
         assert_eq!(controls.sync.label, "停止");
         assert_eq!(controls.sync.icon, "media-playback-stop-symbolic");
@@ -208,7 +185,7 @@ mod tests {
 
     #[test]
     fn manual_previewing_turns_preview_button_into_stop_button() {
-        let controls = controls_for(ready(SyncMode::Manual, RuntimeState::Previewing));
+        let controls = controls_for(ready(SyncMode::Manual, CommandRuntime::RunningPreview));
 
         assert_eq!(controls.preview.label, "停止");
         assert_eq!(controls.preview.icon, "media-playback-stop-symbolic");
@@ -220,7 +197,7 @@ mod tests {
     fn unauthenticated_account_cannot_start_any_mode() {
         let controls = controls_for(ControlInput {
             mode: SyncMode::Manual,
-            runtime: RuntimeState::Idle,
+            runtime: CommandRuntime::Idle,
             authenticated: false,
             client_ready: true,
         });
@@ -240,12 +217,13 @@ mod tests {
 
     #[test]
     fn in_progress_and_blocked_states_disable_starts() {
-        let previewing = controls_for(ready(SyncMode::Manual, RuntimeState::Previewing));
+        let previewing = controls_for(ready(SyncMode::Manual, CommandRuntime::RunningPreview));
         assert_eq!(previewing.preview.label, "停止");
         assert!(!previewing.sync.sensitive);
         assert!(previewing.preview.sensitive);
 
-        let stopping_sync = controls_for(ready(SyncMode::Manual, RuntimeState::StoppingSync));
+        let stopping_sync =
+            controls_for(ready(SyncMode::Manual, CommandRuntime::StoppingManualSync));
         assert_eq!(stopping_sync.sync.label, "停止");
         assert_eq!(stopping_sync.sync.icon, "process-stop-symbolic");
         assert!(!stopping_sync.sync.sensitive);
@@ -253,7 +231,8 @@ mod tests {
         assert_eq!(stopping_sync.preview.icon, "view-list-symbolic");
         assert!(!stopping_sync.preview.sensitive);
 
-        let stopping_preview = controls_for(ready(SyncMode::Manual, RuntimeState::StoppingPreview));
+        let stopping_preview =
+            controls_for(ready(SyncMode::Manual, CommandRuntime::StoppingPreview));
         assert_eq!(stopping_preview.sync.label, "同步");
         assert_eq!(stopping_preview.sync.icon, "view-refresh-symbolic");
         assert!(!stopping_preview.sync.sensitive);
@@ -262,12 +241,12 @@ mod tests {
         assert!(!stopping_preview.preview.sensitive);
 
         let stopping_monitor =
-            controls_for(ready(SyncMode::Automatic, RuntimeState::StoppingMonitor));
+            controls_for(ready(SyncMode::Automatic, CommandRuntime::StoppingMonitor));
         assert_eq!(stopping_monitor.sync.label, "正在停止");
         assert_eq!(stopping_monitor.sync.icon, "process-stop-symbolic");
         assert!(!stopping_monitor.sync.sensitive);
 
-        let blocked = controls_for(ready(SyncMode::Manual, RuntimeState::Blocked));
+        let blocked = controls_for(ready(SyncMode::Manual, CommandRuntime::Blocked));
         assert!(!blocked.sync.sensitive);
         assert!(!blocked.preview.sensitive);
     }

@@ -1,5 +1,5 @@
-use super::{start_forced_one_time_sync_for_account, state::AppState};
-use crate::account::Account;
+use super::super::{actions::start_forced_one_time_sync_for_account, state::AppState};
+use crate::profile::Account;
 use adw::prelude::*;
 use std::rc::Rc;
 
