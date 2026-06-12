@@ -1,4 +1,4 @@
-use crate::event::BackendEvent;
+use crate::event::{BackendError, BackendEvent};
 use crate::profile::Account;
 use serde::Deserialize;
 use std::{fs, io, path::Path, sync::mpsc, thread, time::Duration};
@@ -39,19 +39,19 @@ struct DriveOwnerUser {
 pub fn start_account_identity_lookup(account: Account, sender: mpsc::Sender<BackendEvent>) {
     thread::spawn(move || {
         let result = fetch_account_identity(&account);
-        let (display_name, email, message) = match result {
+        let (display_name, email, error) = match result {
             Ok(identity) => (identity.display_name, identity.email, None),
-            Err(error) => (
+            Err(err) => (
                 None,
                 None,
-                Some(format!("无法读取 Microsoft 账号信息: {error}")),
+                Some(BackendError::IdentityLookupFailed(err.to_string())),
             ),
         };
         let _ = sender.send(BackendEvent::AccountIdentityFound {
             account_id: account.id,
             display_name,
             email,
-            message,
+            error,
         });
     });
 }

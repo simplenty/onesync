@@ -1,4 +1,5 @@
 use super::{
+    control_action_icon, control_action_label,
     account_label,
     events::operation,
     layout::{ACCOUNT_CONTEXT_MENU_WIDTH, build_profile_context_popover},
@@ -152,15 +153,19 @@ pub(in crate::app) fn refresh_content(state: &AppState) {
 
     state.sync_button.set_visible(controls.sync.visible);
     state.sync_button.set_sensitive(controls.sync.sensitive);
-    set_command_button_content(&state.sync_button, controls.sync.icon, controls.sync.label);
+    set_command_button_content(
+        &state.sync_button,
+        control_action_icon(controls.sync.action),
+        control_action_label(controls.sync.action),
+    );
     state.preview_button.set_visible(controls.preview.visible);
     state
         .preview_button
         .set_sensitive(controls.preview.sensitive);
     set_command_button_content(
         &state.preview_button,
-        controls.preview.icon,
-        controls.preview.label,
+        control_action_icon(controls.preview.action),
+        control_action_label(controls.preview.action),
     );
     state.edit_button.set_sensitive(true);
 }

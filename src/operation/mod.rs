@@ -1,5 +1,5 @@
 #![allow(unused_imports)]
-mod controls;
+pub mod controls;
 mod model;
 mod registry;
 

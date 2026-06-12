@@ -166,20 +166,10 @@ pub fn parse_file_change_line(line: &str) -> Option<FileChange> {
         0.0
     });
 
-    let action = pattern.kind.action_label();
-    let state = if failed {
-        format!("{action}失败")
-    } else if done || progress >= 1.0 {
-        format!("{action}完成")
-    } else {
-        format!("正在{action}")
-    };
-
     Some(FileChange {
         name: path.to_string(),
-        state,
         progress,
-        icon: pattern.kind.icon_name(),
+        failed,
         kind: pattern.kind,
         direction: pattern.direction,
     })
@@ -312,8 +302,6 @@ mod tests {
         let file = parsed("Uploading new file: ./.onesync-parser-test/move-source.txt ... done");
 
         assert_eq!(file.name, "./.onesync-parser-test/move-source.txt");
-        assert_eq!(file.state, "上传完成");
-        assert_eq!(file.icon, "go-up-symbolic");
         assert_progress(file.progress, 1.0);
     }
 
@@ -324,8 +312,6 @@ mod tests {
         );
 
         assert_eq!(file.name, "./.onesync-progress-test/upload-progress.bin");
-        assert_eq!(file.state, "正在上传");
-        assert_eq!(file.icon, "go-up-symbolic");
         assert_progress(file.progress, 0.37);
     }
 
@@ -335,8 +321,6 @@ mod tests {
             parsed("Deleting item from Microsoft OneDrive: .onesync-parser-test/move-source.txt");
 
         assert_eq!(file.name, ".onesync-parser-test/move-source.txt");
-        assert_eq!(file.state, "删除完成");
-        assert_eq!(file.icon, "edit-delete-symbolic");
         assert_progress(file.progress, 1.0);
     }
 
@@ -345,8 +329,6 @@ mod tests {
         let file = parsed("Uploading modified file: .onesync-parser-test/move-target.txt ... done");
 
         assert_eq!(file.name, ".onesync-parser-test/move-target.txt");
-        assert_eq!(file.state, "更新完成");
-        assert_eq!(file.icon, "document-save-symbolic");
         assert_progress(file.progress, 1.0);
     }
 
@@ -356,7 +338,6 @@ mod tests {
             "Uploading: ./.onesync-progress-test/upload-progress.bin ... 37.5%  |  ETA    00:00:10",
         );
 
-        assert_eq!(file.state, "正在上传");
         assert_progress(file.progress, 0.375);
     }
 
@@ -364,7 +345,6 @@ mod tests {
     fn starts_incomplete_transfer_at_zero_without_percent() {
         let file = parsed("Uploading: ./.onesync-progress-test/upload-progress.bin");
 
-        assert_eq!(file.state, "正在上传");
         assert_progress(file.progress, 0.0);
     }
 
@@ -375,7 +355,6 @@ mod tests {
         assert_eq!(file.name, "./docs/a.txt");
         assert_eq!(file.kind, ChangeKind::UploadNew);
         assert_eq!(file.direction, ChangeDirection::LocalToRemote);
-        assert_eq!(file.state, "上传完成");
         assert_progress(file.progress, 1.0);
     }
 
@@ -385,7 +364,6 @@ mod tests {
 
         assert_eq!(file.kind, ChangeKind::DeleteRemote);
         assert_eq!(file.direction, ChangeDirection::LocalToRemote);
-        assert_eq!(file.state, "删除完成");
     }
 
     #[test]
@@ -394,7 +372,6 @@ mod tests {
 
         assert_eq!(file.kind, ChangeKind::DeleteLocal);
         assert_eq!(file.direction, ChangeDirection::RemoteToLocal);
-        assert_eq!(file.state, "删除完成");
     }
 
     #[test]
@@ -408,7 +385,6 @@ mod tests {
         assert_eq!(change.apply, PreviewAction::UploadLocalToRemote);
         assert_eq!(change.intent, PreviewIntent::LocalChangeToRemote);
         assert_eq!(change.state, PreviewState::Pending);
-        assert_eq!(change.description(), "将上传到 OneDrive");
     }
 
     #[test]
@@ -420,8 +396,6 @@ mod tests {
         assert_eq!(change.kind, ChangeKind::Download);
         assert_eq!(change.apply, PreviewAction::DownloadRemoteToLocal);
         assert_eq!(change.intent, PreviewIntent::RemoteChangeToLocal);
-        assert_eq!(change.intent.label(), "远端新增或更新");
-        assert_eq!(change.description(), "将下载到本地");
     }
 
     #[test]
@@ -430,8 +404,6 @@ mod tests {
             .expect("dry-run download should become a preview change");
 
         assert_eq!(change.intent, PreviewIntent::RemoteChangeToLocal);
-        assert_eq!(change.intent.label(), "远端新增或更新");
-        assert_eq!(change.description(), "将下载到本地");
         assert!(!change.needs_confirmation());
     }
 
@@ -442,8 +414,6 @@ mod tests {
                 .expect("remote delete preview should be parsed");
 
         assert_eq!(change.intent, PreviewIntent::LocalDeleteToRemote);
-        assert_eq!(change.intent.label(), "本地删除");
-        assert_eq!(change.description(), "将从 OneDrive 删除");
         assert!(!change.needs_confirmation());
     }
 
@@ -457,7 +427,6 @@ mod tests {
         assert_eq!(change.kind, ChangeKind::DeleteRemote);
         assert_eq!(change.apply, PreviewAction::DeleteRemote);
         assert_eq!(change.intent, PreviewIntent::LocalDeleteToRemote);
-        assert_eq!(change.intent.label(), "本地删除");
     }
 
     #[test]
@@ -469,7 +438,6 @@ mod tests {
         assert_eq!(change.kind, ChangeKind::DeleteLocal);
         assert_eq!(change.apply, PreviewAction::DeleteLocal);
         assert_eq!(change.intent, PreviewIntent::RemoteDeleteToLocal);
-        assert_eq!(change.intent.label(), "远端删除");
     }
 
     #[test]

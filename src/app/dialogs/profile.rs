@@ -2,6 +2,7 @@ use super::super::{
     account_label,
     actions::load_sync_mode_for_selected_profile,
     can_mutate_profile,
+    backend_error_message,
     dialogs::auth::show_auth_dialog,
     dialogs::confirm,
     render::{rebuild_profile_list, refresh_content, show_toast},
@@ -9,6 +10,7 @@ use super::super::{
     status_label,
     widgets::form_row,
 };
+use crate::event::BackendError;
 use crate::profile::remove_profile_sync_mode;
 use crate::profile::{
     Account, ConfigEdit, OneDriveConfig, create_account, read_sync_list,
@@ -304,7 +306,13 @@ pub(in crate::app) fn show_add_account_dialog(state: Rc<AppState>) {
                 add_dialog.close();
                 show_auth_dialog(Rc::clone(&dialog_state), auth_account);
             }
-            Err(error) => show_toast(&dialog_state, &format!("添加账号失败: {error}")),
+            Err(error) => show_toast(
+                &dialog_state,
+                &format!(
+                    "添加账号失败: {}",
+                    backend_error_message(&BackendError::from(&error))
+                ),
+            ),
         }
     });
 

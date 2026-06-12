@@ -1,4 +1,8 @@
 use crate::event::payload::{PreviewChange, PreviewState, FileChange};
+use crate::app::{
+    change_kind_icon, file_display_state, preview_change_icon,
+    preview_intent_label, preview_intent_detail, preview_change_description,
+};
 use gtk::{Align, prelude::*};
 use std::{
     cell::{Cell, RefCell},
@@ -77,7 +81,7 @@ impl TransferList {
             } else {
                 file.progress.max(row.progress_bar.fraction())
             };
-            row.state_label.set_label(&file.state);
+            row.state_label.set_label(&file_display_state(&file));
             row.target_progress.set(progress);
             row.completed.set(completed);
             animate_progress(&row, progress);
@@ -106,7 +110,7 @@ impl TransferList {
     pub(in crate::app) fn upsert_preview(&self, account_id: String, change: PreviewChange) {
         let key = preview_row_key(&account_id, &change.id);
         if let Some(ListRow::Preview(row)) = self.rows.borrow().get(&key).cloned() {
-            row.state_label.set_label(change.description());
+            row.state_label.set_label(preview_change_description(&change));
             row.state.set(change.state);
             self.reorder();
             return;
@@ -267,7 +271,7 @@ fn build_file_row(file: FileChange) -> (gtk::ListBoxRow, TransferRow) {
         .margin_end(12)
         .build();
 
-    let icon = gtk::Image::from_icon_name(file.icon);
+    let icon = gtk::Image::from_icon_name(change_kind_icon(file.kind));
     icon.set_valign(Align::Center);
 
     let text_box = gtk::Box::builder()
@@ -278,12 +282,12 @@ fn build_file_row(file: FileChange) -> (gtk::ListBoxRow, TransferRow) {
     text_box.set_size_request(FILE_COLUMN_WIDTH, -1);
 
     let name = gtk::Label::builder()
-        .label(file.name)
+        .label(&file.name)
         .halign(Align::Start)
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .build();
     let state = gtk::Label::builder()
-        .label(file.state)
+        .label(&file_display_state(&file))
         .halign(Align::Start)
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .css_classes(["dim-label"])
@@ -330,7 +334,7 @@ fn build_preview_row(change: PreviewChange) -> (gtk::ListBoxRow, PreviewRow) {
         .margin_end(12)
         .build();
 
-    let icon = gtk::Image::from_icon_name(change.icon_name());
+    let icon = gtk::Image::from_icon_name(preview_change_icon(&change));
     icon.set_valign(Align::Center);
 
     let text_box = gtk::Box::builder()
@@ -348,11 +352,15 @@ fn build_preview_row(change: PreviewChange) -> (gtk::ListBoxRow, PreviewRow) {
     let state_text = if change.needs_confirmation() {
         format!(
             "{} · {} · 需要确认",
-            change.intent.label(),
-            change.description()
+            preview_intent_label(change.intent),
+            preview_change_description(&change),
         )
     } else {
-        format!("{} · {}", change.intent.label(), change.description())
+        format!(
+            "{} · {}",
+            preview_intent_label(change.intent),
+            preview_change_description(&change),
+        )
     };
     let state = gtk::Label::builder()
         .label(state_text)
@@ -360,7 +368,7 @@ fn build_preview_row(change: PreviewChange) -> (gtk::ListBoxRow, PreviewRow) {
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .css_classes(["dim-label"])
         .build();
-    state.set_tooltip_text(Some(change.intent.detail()));
+    state.set_tooltip_text(Some(preview_intent_detail(change.intent)));
     text_box.append(&name);
     text_box.append(&state);
 

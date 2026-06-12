@@ -2,17 +2,20 @@ mod actions;
 mod dialogs;
 mod events;
 mod layout;
+mod present;
 mod render;
 mod state;
 mod widgets;
 
 use crate::{
-    profile::{Account, AccountStatus, DEFAULT_ONEDRIVE_COMMAND, SyncMode, is_authenticated, load_onedrive_command, load_store, save_accounts, save_profile_sync_mode},
     adapter::{
         graph::start_account_identity_lookup,
         onedrive::check_client,
     },
-    event::ClientCheck,
+    event::{
+        ClientCheck,
+    },
+    profile::{Account, AccountStatus, DEFAULT_ONEDRIVE_COMMAND, SyncMode, is_authenticated, load_onedrive_command, load_store, save_accounts, save_profile_sync_mode},
 };
 use actions::{connect_preview_row_actions, start_or_stop_auto_sync_for_account, start_or_stop_manual_one_time_sync_for_account, start_or_stop_preview_for_account};
 use adw::prelude::*;
@@ -30,6 +33,7 @@ use std::{
     rc::Rc,
     sync::mpsc,
 };
+pub(in crate::app) use present::*;
 
 const APP_ID: &str = "io.github.onesync.Demo";
 
@@ -144,7 +148,7 @@ fn connect_actions(state: Rc<AppState>) {
             if mode_state.updating_sync_mode_dropdown.get() {
                 return;
             }
-            let mode = SyncMode::from_dropdown_index(dropdown.selected());
+            let mode = sync_mode_from_dropdown_index(dropdown.selected());
             mode_state.selected_sync_mode.set(mode);
             if let Some(account_id) = mode_state.selected_account_id()
                 && let Err(error) = save_profile_sync_mode(&account_id, mode)
@@ -273,34 +277,31 @@ pub(in crate::app) fn onedrive_command(state: &AppState) -> String {
     state.onedrive_command.clone()
 }
 
-pub(in crate::app) fn status_title(status: &AccountStatus) -> &'static str {
-    match status {
-        AccountStatus::NeedsAuth => "需要认证",
-        AccountStatus::Authenticated => "已认证",
-        AccountStatus::Error(_) => "需要处理",
+pub(in crate::app) fn sync_mode_from_dropdown_index(index: u32) -> SyncMode {
+    match index {
+        0 => SyncMode::Manual,
+        1 => SyncMode::Automatic,
+        _ => SyncMode::Manual,
     }
 }
 
-pub(in crate::app) fn status_label(status: &AccountStatus) -> &str {
-    match status {
-        AccountStatus::NeedsAuth => "未认证",
-        AccountStatus::Authenticated => "已认证",
-        AccountStatus::Error(message) => message.as_str(),
+pub(in crate::app) fn dropdown_index_from_sync_mode(mode: SyncMode) -> u32 {
+    match mode {
+        SyncMode::Manual => 0,
+        SyncMode::Automatic => 1,
     }
 }
 
-pub(in crate::app) fn status_detail(account: &Account) -> String {
-    match &account.status {
-        AccountStatus::NeedsAuth => format!("配置目录: {}", account.config_dir),
-        AccountStatus::Authenticated => format!("同步目录: {}", account.sync_dir),
-        AccountStatus::Error(message) => format!("最近错误: {message}"),
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-pub(in crate::app) fn account_label(account: &Account) -> String {
-    if account.email.trim().is_empty() {
-        account.id.clone()
-    } else {
-        account.email.clone()
+    #[test]
+    fn sync_mode_maps_to_dropdown_indices() {
+        assert_eq!(sync_mode_from_dropdown_index(0), SyncMode::Manual);
+        assert_eq!(sync_mode_from_dropdown_index(1), SyncMode::Automatic);
+        assert_eq!(sync_mode_from_dropdown_index(99), SyncMode::Manual);
+        assert_eq!(dropdown_index_from_sync_mode(SyncMode::Manual), 0);
+        assert_eq!(dropdown_index_from_sync_mode(SyncMode::Automatic), 1);
     }
 }

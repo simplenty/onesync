@@ -1,4 +1,5 @@
 use super::{
+    backend_error_message, client_check_message, confirmation_kind_message, operation_label,
     dialogs::{auth, confirm},
     render::{rebuild_profile_list, refresh_content, show_toast},
     state::AppState,
@@ -9,7 +10,7 @@ use crate::{
         graph::start_account_identity_lookup,
         onedrive::{OperationHandle, stop_operation},
     },
-    event::{BackendEvent, ConfirmationKind},
+    event::{BackendError, BackendEvent, ConfirmationKind},
     operation::{AccountOperation, OperationKind, OperationPhase},
     profile::{Account, AccountStatus, save_accounts},
 };
@@ -36,7 +37,7 @@ fn drain_backend_events(state: &Rc<AppState>) {
     while let Some(event) = events.pop_front() {
         match event {
             BackendEvent::ClientChecked(check) => {
-                let message = check.message();
+                let message = client_check_message(&check);
                 state.client_check.replace(check);
                 refresh_content(state);
                 show_toast(state, &message);
@@ -60,13 +61,18 @@ fn drain_backend_events(state: &Rc<AppState>) {
             BackendEvent::AuthFinished {
                 account_id,
                 success,
-                message,
+                error,
             } => {
                 finish_operation(state, &account_id);
                 let status = if success {
                     AccountStatus::Authenticated
                 } else {
-                    AccountStatus::Error(message.unwrap_or_else(|| "认证失败".to_string()))
+                    AccountStatus::Error(
+                        error
+                            .as_ref()
+                            .map(backend_error_message)
+                            .unwrap_or_else(|| "认证失败".to_string()),
+                    )
                 };
                 update_account_status(state, &account_id, status);
                 state.transfers.clear();
@@ -98,7 +104,7 @@ fn drain_backend_events(state: &Rc<AppState>) {
                 account_id,
                 display_name,
                 email,
-                message,
+                error,
             } => {
                 if update_account_identity(
                     state,
@@ -109,8 +115,8 @@ fn drain_backend_events(state: &Rc<AppState>) {
                     rebuild_profile_list(state);
                     refresh_content(state);
                 }
-                if let Some(message) = message {
-                    show_toast(state, &message);
+                if let Some(error) = error {
+                    show_toast(state, &backend_error_message(&error));
                 } else if let Some(email) = email {
                     show_toast(state, &format!("账号: {email}"));
                 }
@@ -120,19 +126,24 @@ fn drain_backend_events(state: &Rc<AppState>) {
                 success,
                 requested_stop,
                 auth_required,
-                message,
+                error,
                 requires_confirmation,
             } => {
                 state.operation_handles.borrow_mut().remove(&account_id);
                 finish_operation(state, &account_id);
                 if auth_required {
-                    handle_auth_required(Rc::clone(state), &account_id, message);
+                    handle_auth_required(Rc::clone(state), &account_id, error);
                     continue;
                 }
                 let status = if success || requested_stop || requires_confirmation.is_some() {
                     AccountStatus::Authenticated
                 } else {
-                    AccountStatus::Error(message.unwrap_or_else(|| "同步失败".to_string()))
+                    AccountStatus::Error(
+                        error
+                            .as_ref()
+                            .map(backend_error_message)
+                            .unwrap_or_else(|| "同步失败".to_string()),
+                    )
                 };
                 update_account_status(state, &account_id, status);
                 if let Some(kind) = requires_confirmation {
@@ -174,13 +185,13 @@ fn drain_backend_events(state: &Rc<AppState>) {
                 success,
                 requested_stop,
                 auth_required,
-                message,
+                error,
                 requires_confirmation,
             } => {
                 state.operation_handles.borrow_mut().remove(&account_id);
                 finish_operation(state, &account_id);
                 if auth_required {
-                    handle_auth_required(Rc::clone(state), &account_id, message);
+                    handle_auth_required(Rc::clone(state), &account_id, error);
                     continue;
                 }
                 if let Some(kind) = requires_confirmation {
@@ -190,14 +201,20 @@ fn drain_backend_events(state: &Rc<AppState>) {
                 } else if success {
                     show_toast(state, "预览完成");
                 } else {
-                    show_toast(state, message.as_deref().unwrap_or("预览失败"));
+                    show_toast(
+                        state,
+                        &error
+                            .as_ref()
+                            .map(backend_error_message)
+                            .unwrap_or_else(|| "预览失败".to_string()),
+                    );
                 }
             }
             BackendEvent::PreviewApplyFinished {
                 account_id,
                 change_id,
                 success,
-                message,
+                error,
             } => {
                 state
                     .applying_preview_changes
@@ -206,12 +223,16 @@ fn drain_backend_events(state: &Rc<AppState>) {
                 if success {
                     show_toast(state, "云端操作已完成，正在更新同步状态");
                 } else {
+                    let message = error
+                        .as_ref()
+                        .map(backend_error_message)
+                        .unwrap_or_else(|| "应用失败".to_string());
                     state.transfers.mark_preview_failed(
                         &account_id,
                         &change_id,
-                        message.as_deref().unwrap_or("应用失败"),
+                        &message,
                     );
-                    show_toast(state, message.as_deref().unwrap_or("应用预览变更失败"));
+                    show_toast(state, &message);
                 }
             }
             BackendEvent::PreviewApplyProgress {
@@ -236,7 +257,7 @@ fn drain_backend_events(state: &Rc<AppState>) {
                 account_id,
                 change_id,
                 success,
-                message,
+                error,
             } => {
                 if success {
                     if let Some(previews) = state.previews.borrow_mut().get_mut(&account_id) {
@@ -247,12 +268,16 @@ fn drain_backend_events(state: &Rc<AppState>) {
                         .mark_preview_applied(&account_id, &change_id);
                     show_toast(state, "已应用并更新同步状态");
                 } else {
+                    let message = error
+                        .as_ref()
+                        .map(backend_error_message)
+                        .unwrap_or_else(|| "同步状态更新失败".to_string());
                     state.transfers.mark_preview_reconcile_failed(
                         &account_id,
                         &change_id,
-                        message.as_deref().unwrap_or("同步状态更新失败"),
+                        &message,
                     );
-                    show_toast(state, message.as_deref().unwrap_or("同步状态更新失败"));
+                    show_toast(state, &message);
                 }
             }
             BackendEvent::ConfirmationRequired { account_id, kind } => {
@@ -263,19 +288,24 @@ fn drain_backend_events(state: &Rc<AppState>) {
                 success,
                 requested_stop,
                 auth_required,
-                message,
+                error,
                 requires_confirmation,
             } => {
                 state.operation_handles.borrow_mut().remove(&account_id);
                 finish_operation(state, &account_id);
                 if auth_required {
-                    handle_auth_required(Rc::clone(state), &account_id, message);
+                    handle_auth_required(Rc::clone(state), &account_id, error);
                     continue;
                 }
                 let status = if success || requested_stop || requires_confirmation.is_some() {
                     AccountStatus::Authenticated
                 } else {
-                    AccountStatus::Error(message.unwrap_or_else(|| "持续同步停止".to_string()))
+                    AccountStatus::Error(
+                        error
+                            .as_ref()
+                            .map(backend_error_message)
+                            .unwrap_or_else(|| "持续同步停止".to_string()),
+                    )
                 };
                 update_account_status(state, &account_id, status);
                 if let Some(kind) = requires_confirmation {
@@ -326,7 +356,7 @@ fn handle_confirmation_required(state: Rc<AppState>, account_id: &str, kind: Con
         return;
     }
 
-    confirm::show_warning_window(state, "需要确认", kind.user_message());
+    confirm::show_warning_window(state, "需要确认", confirmation_kind_message(kind));
 }
 
 pub(super) fn stop_monitor(state: &AppState, account_id: &str) {
@@ -407,11 +437,11 @@ pub(super) fn finish_operation(state: &AppState, account_id: &str) {
     refresh_content(state);
 }
 
-pub(super) fn show_operation_toast(state: &AppState, account_id: &str) {
-    let message = operation(state, account_id)
-        .map_or("该账户正在运行操作".to_string(), |operation| {
-            format!("该账户正在执行{}", operation.label())
-        });
+    pub(super) fn show_operation_toast(state: &AppState, account_id: &str) {
+        let message = operation(state, account_id)
+            .map_or("该账户正在运行操作".to_string(), |operation| {
+                format!("该账户正在执行{}", operation_label(operation))
+            });
     show_toast(state, &message);
 }
 
@@ -466,11 +496,14 @@ fn should_replace_profile_name(current_name: &str, current_email: &str) -> bool 
     name.is_empty() || name == "OneDrive" || name.starts_with("OneDrive ") || name == current_email
 }
 
-fn handle_auth_required(state: Rc<AppState>, account_id: &str, message: Option<String>) {
+fn handle_auth_required(state: Rc<AppState>, account_id: &str, error: Option<BackendError>) {
     update_account_status(&state, account_id, AccountStatus::NeedsAuth);
     show_toast(
         &state,
-        message.as_deref().unwrap_or("认证已失效，请重新完成登录"),
+        &error
+            .as_ref()
+            .map(backend_error_message)
+            .unwrap_or_else(|| "认证已失效，请重新完成登录".to_string()),
     );
     let account = state
         .accounts
@@ -488,7 +521,7 @@ pub(super) fn ensure_client_ready(state: &AppState) -> bool {
     if check.is_ready() {
         true
     } else {
-        show_toast(state, &check.message());
+        show_toast(state, &client_check_message(&check));
         false
     }
 }

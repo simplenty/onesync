@@ -1,4 +1,4 @@
-use crate::event::{ConfirmationKind, Version};
+use crate::event::{BackendError, ConfirmationKind, Version};
 
 pub(super) fn parse_version(output: &str) -> Option<Version> {
     let (_, version) = output.split_once("onedrive")?;
@@ -19,32 +19,34 @@ pub(super) fn combined_output(stdout: &[u8], stderr: &[u8]) -> String {
     combined
 }
 
-pub(super) fn parse_onedrive_error(output: &str) -> String {
+pub(super) fn classify_onedrive_error(output: &str) -> BackendError {
     let lower = output.to_ascii_lowercase();
     if is_auth_required(output) {
-        "认证已过期或缺少 refresh_token，请重新完成登录".to_string()
+        BackendError::AuthExpired
     } else if lower.contains("could not resolve")
         || lower.contains("connection")
         || lower.contains("network")
         || lower.contains("timeout")
     {
-        "网络连接失败，请检查网络或代理后重试".to_string()
+        BackendError::Network
     } else if lower.contains("unknown key") || lower.contains("unknown config") {
-        "配置文件包含 onedrive 不支持的选项，请编辑账户配置".to_string()
+        BackendError::UnsupportedConfig
     } else if lower.contains("failed") && (lower.contains("upload") || lower.contains("download")) {
-        "部分上传或下载失败，请查看传输列表和详情".to_string()
+        BackendError::PartialTransfer
     } else if lower.contains("segmentation fault") || lower.contains("core dumped") {
-        "同步工具异常退出，请升级同步工具或检查该账户配置".to_string()
+        BackendError::CliCrashed
     } else if lower.contains("auth") || lower.contains("unauthorized") {
-        "认证失败，请重新完成该账户登录".to_string()
+        BackendError::AuthFailed
     } else {
-        output
-            .lines()
-            .rev()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("onedrive 操作失败")
-            .trim()
-            .to_string()
+        BackendError::CliOutput(
+            output
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("")
+                .trim()
+                .to_string(),
+        )
     }
 }
 
@@ -147,16 +149,28 @@ mod tests {
     #[test]
     fn maps_known_error_output_to_actionable_messages() {
         assert_eq!(
-            parse_onedrive_error("ERROR: refresh_token is invalid"),
-            "认证已过期或缺少 refresh_token，请重新完成登录"
+            classify_onedrive_error("ERROR: refresh_token is invalid"),
+            BackendError::AuthExpired
         );
         assert_eq!(
-            parse_onedrive_error("curl timeout while connecting"),
-            "网络连接失败，请检查网络或代理后重试"
+            classify_onedrive_error("curl timeout while connecting"),
+            BackendError::Network
         );
         assert_eq!(
-            parse_onedrive_error("unknown config key: verbose"),
-            "配置文件包含 onedrive 不支持的选项，请编辑账户配置"
+            classify_onedrive_error("unknown config key: verbose"),
+            BackendError::UnsupportedConfig
+        );
+    }
+
+    #[test]
+    fn classifies_unrecognized_output_as_cli_output() {
+        assert_eq!(
+            classify_onedrive_error("some random stderr line\nERROR: something else"),
+            BackendError::CliOutput("ERROR: something else".to_string())
+        );
+        assert_eq!(
+            classify_onedrive_error(""),
+            BackendError::CliOutput(String::new())
         );
     }
 

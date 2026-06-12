@@ -1,3 +1,4 @@
+use crate::event::BackendError;
 use crate::{
     profile::config::{ConfigEdit, OneDriveConfig},
     utils::{config_root, expand_home, unix_timestamp},
@@ -7,6 +8,21 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountStoreError {
+    DuplicateAccountName,
+    DuplicateSyncDir,
+}
+
+impl From<&AccountStoreError> for BackendError {
+    fn from(error: &AccountStoreError) -> Self {
+        match error {
+            AccountStoreError::DuplicateAccountName => BackendError::DuplicateAccountName,
+            AccountStoreError::DuplicateSyncDir => BackendError::DuplicateSyncDir,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AccountStatus {
@@ -56,20 +72,20 @@ pub fn create_account(
     name: &str,
     email: &str,
     sync_dir: &str,
-) -> io::Result<Account> {
+) -> Result<Account, AccountStoreError> {
     validate_unique(existing, name, sync_dir)?;
     let name = if name.is_empty() { "OneDrive" } else { name };
     let id = format!("{}-{}", sanitize_id(name), unix_timestamp());
     let config_dir = profiles_root().join(&id);
-    fs::create_dir_all(&config_dir)?;
+    fs::create_dir_all(&config_dir).expect("failed to create profile config directory");
 
     let mut config = OneDriveConfig::default();
     config.apply_edit(&ConfigEdit {
         sync_dir: sync_dir.to_string(),
         ..ConfigEdit::default()
     });
-    config.write_with_backup(config_dir.join("config"))?;
-    fs::create_dir_all(expand_home(sync_dir))?;
+    config.write_with_backup(config_dir.join("config")).expect("failed to write profile config");
+    fs::create_dir_all(expand_home(sync_dir)).expect("failed to create sync directory");
 
     Ok(Account {
         id,
@@ -113,22 +129,16 @@ pub fn suggested_sync_dir() -> String {
     }
 }
 
-fn validate_unique(existing: &[Account], name: &str, sync_dir: &str) -> io::Result<()> {
+fn validate_unique(existing: &[Account], name: &str, sync_dir: &str) -> Result<(), AccountStoreError> {
     if existing.iter().any(|account| account.name == name) {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "账户名称已存在",
-        ));
+        return Err(AccountStoreError::DuplicateAccountName);
     }
     let sync_dir = expand_home(sync_dir);
     if existing
         .iter()
         .any(|account| expand_home(&account.sync_dir) == sync_dir)
     {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "sync directory already exists",
-        ));
+        return Err(AccountStoreError::DuplicateSyncDir);
     }
     Ok(())
 }
@@ -180,7 +190,24 @@ mod tests {
         let error = create_account(&[existing], "Imported", "", "~/OneDrive")
             .expect_err("duplicate sync_dir should be rejected");
 
-        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(error, AccountStoreError::DuplicateSyncDir);
+    }
+
+    #[test]
+    fn rejects_duplicate_account_name() {
+        let existing = Account {
+            id: "existing".to_string(),
+            name: "Existing".to_string(),
+            email: String::new(),
+            config_dir: "/tmp/existing".to_string(),
+            sync_dir: "~/OneDrive-A".to_string(),
+            status: AccountStatus::Authenticated,
+        };
+
+        let error = create_account(&[existing], "Existing", "", "~/OneDrive-B")
+            .expect_err("duplicate name should be rejected");
+
+        assert_eq!(error, AccountStoreError::DuplicateAccountName);
     }
 
     #[test]

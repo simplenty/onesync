@@ -12,22 +12,6 @@ pub enum SyncMode {
 }
 
 impl SyncMode {
-    #[must_use]
-    pub fn from_dropdown_index(index: u32) -> Self {
-        match index {
-            0 => Self::Manual,
-            1 => Self::Automatic,
-            _ => Self::Manual,
-        }
-    }
-
-    #[must_use]
-    pub fn dropdown_index(self) -> u32 {
-        match self {
-            Self::Manual => 0,
-            Self::Automatic => 1,
-        }
-    }
 }
 
 pub fn load_onedrive_command() -> io::Result<String> {

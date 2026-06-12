@@ -1,5 +1,5 @@
 use super::identity::graph_access_token;
-use crate::event::BackendEvent;
+use crate::event::{BackendError, BackendEvent};
 use crate::{
     profile::Account,
     event::payload::{PreviewAction, PreviewChange},
@@ -46,9 +46,9 @@ pub fn start_apply_preview_change(
             .and_then(|_| finish_graph_apply_with_reconcile(&account, &change, binary, &sender));
         let _ = sender.send(BackendEvent::PreviewApplyFinished {
             account_id: account.id,
-            change_id,
-            success: result.is_ok(),
-            message: result.err().map(|_| "应用失败，请稍后重试".to_string()),
+           change_id,
+           success: result.is_ok(),
+            error: result.err().map(|_| BackendError::ApplyFailed),
         });
     });
 }
@@ -96,15 +96,15 @@ fn finish_graph_apply_with_reconcile(
         .and_then(|_| crate::adapter::onedrive::display_reconcile_status(account, binary, &change.path));
 
     let success = reconcile.is_ok();
-    let message = reconcile
+    let error = reconcile
         .as_ref()
         .err()
-        .map(|_| "同步状态更新失败，请稍后重试".to_string());
+        .map(|_| BackendError::ReconcileFailed);
     let _ = sender.send(BackendEvent::PreviewReconcileFinished {
         account_id: account.id.clone(),
         change_id: change.id.clone(),
         success,
-        message: message.clone(),
+        error: error.clone(),
     });
 
     reconcile.map(|_| ())

@@ -129,7 +129,7 @@ pub(in crate::app) fn build_content_widgets() -> (adw::ToolbarView, ContentWidge
         .spacing(12)
         .build();
     let mode_dropdown = gtk::DropDown::from_strings(&["手动模式", "自动模式"]);
-    mode_dropdown.set_selected(crate::profile::SyncMode::Manual.dropdown_index());
+    mode_dropdown.set_selected(super::dropdown_index_from_sync_mode(crate::profile::SyncMode::Manual));
     mode_dropdown.set_tooltip_text(Some("选择自动同步或手动同步"));
     let sync_button = command_button("view-refresh-symbolic", "同步");
     let preview_button = command_button("view-list-symbolic", "预览");

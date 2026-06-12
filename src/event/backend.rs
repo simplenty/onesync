@@ -1,4 +1,5 @@
 use crate::event::payload::{FileChange, PreviewChange};
+use crate::event::error::{BackendError, ProcPhase};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Version {
@@ -20,22 +21,6 @@ impl ClientCheck {
     pub fn is_ready(&self) -> bool {
         matches!(self, Self::Ready(_))
     }
-
-    #[must_use]
-    pub fn message(&self) -> String {
-        match self {
-            Self::Unknown => "正在检测同步工具".to_string(),
-            Self::Ready(version) => format!(
-                "同步工具 {}.{}.{} 可用",
-                version.major, version.minor, version.patch
-            ),
-            Self::Missing(error) => format!("未找到同步工具: {error}"),
-            Self::Unsupported { found, minimum } => format!(
-                "同步工具版本过低: 当前 {}.{}.{}, 需要 >= {}.{}.{}",
-                found.major, found.minor, found.patch, minimum.major, minimum.minor, minimum.patch
-            ),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -49,20 +34,20 @@ pub enum BackendEvent {
     AuthFinished {
         account_id: String,
         success: bool,
-        message: Option<String>,
+        error: Option<BackendError>,
     },
     AccountIdentityFound {
         account_id: String,
         display_name: Option<String>,
         email: Option<String>,
-        message: Option<String>,
+        error: Option<BackendError>,
     },
     SyncFinished {
         account_id: String,
         success: bool,
         requested_stop: bool,
         auth_required: bool,
-        message: Option<String>,
+        error: Option<BackendError>,
         requires_confirmation: Option<ConfirmationKind>,
     },
     TransferEvent {
@@ -78,14 +63,14 @@ pub enum BackendEvent {
         success: bool,
         requested_stop: bool,
         auth_required: bool,
-        message: Option<String>,
+        error: Option<BackendError>,
         requires_confirmation: Option<ConfirmationKind>,
     },
     PreviewApplyFinished {
         account_id: String,
         change_id: String,
         success: bool,
-        message: Option<String>,
+        error: Option<BackendError>,
     },
     PreviewApplyProgress {
         account_id: String,
@@ -101,7 +86,7 @@ pub enum BackendEvent {
         account_id: String,
         change_id: String,
         success: bool,
-        message: Option<String>,
+        error: Option<BackendError>,
     },
     ConfirmationRequired {
         account_id: String,
@@ -112,7 +97,7 @@ pub enum BackendEvent {
         success: bool,
         requested_stop: bool,
         auth_required: bool,
-        message: Option<String>,
+        error: Option<BackendError>,
         requires_confirmation: Option<ConfirmationKind>,
     },
 }
@@ -126,17 +111,4 @@ pub enum ConfirmationKind {
 }
 
 impl ConfirmationKind {
-    #[must_use]
-    pub fn user_message(self) -> &'static str {
-        match self {
-            Self::ResyncRequired => {
-                "onedrive 要求执行 --resync。请确认该账户的本地与远端状态后再手动处理。"
-            }
-            Self::BigDelete => "onedrive 检测到大量删除，需要授权。请先检查删除列表后再继续。",
-            Self::DownloadOnlyCleanup => "download-only 清理可能删除本地文件。请确认配置后再继续。",
-            Self::UploadOnlyNoRemoteDelete => {
-                "upload-only 与 no-remote-delete 组合需要显式确认兼容性。"
-            }
-        }
-    }
 }

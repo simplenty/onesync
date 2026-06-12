@@ -2,11 +2,11 @@ use super::parse::{parse_file_change_line, parse_preview_change_line};
 use super::{
     command::{OneDriveCommandKind, add_single_directory_scope, build_command},
     output::{
-        combined_output, is_auth_required, parse_confirmation, parse_onedrive_error, parse_version,
+        combined_output, is_auth_required, parse_confirmation, classify_onedrive_error, parse_version,
     },
 };
 use crate::{
-    event::{BackendEvent, ClientCheck, Version},
+    event::{BackendError, BackendEvent, ClientCheck, ProcPhase, Version},
     profile::config::ensure_transfer_metrics_enabled,
     profile::{Account, auth_response_path, auth_url_path, is_authenticated},
 };
@@ -55,7 +55,7 @@ pub fn check_client(binary: String, sender: mpsc::Sender<BackendEvent>) {
                         found: version,
                         minimum: MIN_ONEDRIVE_VERSION,
                     },
-                    None => ClientCheck::Missing("无法确认同步工具版本".to_string()),
+                    None => ClientCheck::Missing("unable to determine onedrive version".to_string()),
                 }
             }
             Err(error) => ClientCheck::Missing(format!("{binary}: {error}")),
@@ -89,7 +89,7 @@ pub fn start_authentication(account: Account, binary: String, sender: mpsc::Send
                 let _ = sender.send(BackendEvent::AuthFinished {
                     account_id: account.id,
                     success: false,
-                    message: Some(format!("无法启动认证: {error}")),
+                    error: Some(BackendError::SpawnFailed(error.to_string())),
                 });
                 return;
             }
@@ -113,18 +113,18 @@ pub fn start_authentication(account: Account, binary: String, sender: mpsc::Send
             Ok(output) => {
                 let combined = combined_output(&output.stdout, &output.stderr);
                 let success = output.status.success() || is_authenticated(&account);
-                let message = (!success).then(|| parse_onedrive_error(&combined));
+                let error = (!success).then(|| classify_onedrive_error(&combined));
                 let _ = sender.send(BackendEvent::AuthFinished {
                     account_id: account.id,
                     success,
-                    message,
+                    error,
                 });
             }
             Err(error) => {
                 let _ = sender.send(BackendEvent::AuthFinished {
                     account_id: account.id,
                     success: false,
-                    message: Some(format!("等待认证进程失败: {error}")),
+                    error: Some(BackendError::WaitFailed(ProcPhase::Auth, error.to_string())),
                 });
             }
         }
@@ -187,7 +187,7 @@ pub fn start_preview(
                     success,
                     requested_stop,
                     auth_required: !success && is_auth_required(&combined),
-                    message: (!success && !requested_stop).then(|| parse_onedrive_error(&combined)),
+                    error: (!success && !requested_stop).then(|| classify_onedrive_error(&combined)),
                     requires_confirmation: parse_confirmation(&combined),
                 });
             }
@@ -197,7 +197,7 @@ pub fn start_preview(
                     success: false,
                     requested_stop,
                     auth_required: false,
-                    message: Some(format!("等待预览进程失败: {error}")),
+                    error: Some(BackendError::WaitFailed(ProcPhase::Preview, error.to_string())),
                     requires_confirmation: None,
                 });
             }
@@ -250,7 +250,7 @@ fn start_sync_with_options(
                     success,
                     requested_stop,
                     auth_required,
-                    message: (!success && !requested_stop).then(|| parse_onedrive_error(&combined)),
+                    error: (!success && !requested_stop).then(|| classify_onedrive_error(&combined)),
                     requires_confirmation: parse_confirmation(&combined),
                 });
             }
@@ -260,7 +260,7 @@ fn start_sync_with_options(
                     success: false,
                     requested_stop,
                     auth_required: false,
-                    message: Some(format!("等待同步进程失败: {error}")),
+                    error: Some(BackendError::WaitFailed(ProcPhase::Sync, error.to_string())),
                     requires_confirmation: None,
                 });
             }
@@ -302,7 +302,7 @@ pub fn start_monitor(
                             success: false,
                             requested_stop: wait_stop_requested.load(Ordering::SeqCst),
                             auth_required: false,
-                            message: Some("无法访问持续同步进程".to_string()),
+                            error: Some(BackendError::MonitorInaccessible),
                             requires_confirmation: None,
                         });
                         return;
@@ -319,7 +319,7 @@ pub fn start_monitor(
                         success: false,
                         requested_stop: wait_stop_requested.load(Ordering::SeqCst),
                         auth_required: false,
-                        message: Some(format!("轮询持续同步进程失败: {error}")),
+                        error: Some(BackendError::MonitorPollFailed(error.to_string())),
                         requires_confirmation: None,
                     });
                     return;
@@ -336,7 +336,7 @@ pub fn start_monitor(
             success,
             requested_stop: wait_stop_requested.load(Ordering::SeqCst),
             auth_required: !success && is_auth_required(&combined),
-            message: (!success).then(|| parse_onedrive_error(&combined)),
+            error: (!success).then(|| classify_onedrive_error(&combined)),
             requires_confirmation: parse_confirmation(&combined),
         });
     });
