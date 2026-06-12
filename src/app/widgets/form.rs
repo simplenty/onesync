@@ -1,14 +1,18 @@
-use gtk::{Align, prelude::*};
+use gtk::{prelude::*, Align};
 
 pub(in crate::app) fn form_row(label: &str, entry: &gtk::Entry) -> gtk::Box {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(12)
+        .margin_top(4)
+        .margin_bottom(4)
+        .margin_start(14)
+        .margin_end(14)
         .build();
     let title = gtk::Label::builder()
         .label(label)
         .halign(Align::Start)
-        .width_request(90)
+        .width_request(110)
         .build();
     row.append(&title);
     row.append(entry);
@@ -22,7 +26,11 @@ pub(in crate::app) fn command_button(icon_name: &str, label: &str) -> gtk::Butto
     button
 }
 
-pub(in crate::app) fn set_command_button_content(button: &gtk::Button, icon_name: &str, label: &str) {
+pub(in crate::app) fn set_command_button_content(
+    button: &gtk::Button,
+    icon_name: &str,
+    label: &str,
+) {
     let content = adw::ButtonContent::builder()
         .icon_name(icon_name)
         .label(label)

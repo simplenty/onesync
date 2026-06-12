@@ -1,16 +1,17 @@
 use super::{
     events::{
-        begin_operation, ensure_client_ready, finish_operation, is_monitor_running, is_sync_running,
-        stop_monitor, stop_sync,
+        begin_operation, ensure_client_ready, finish_operation, is_monitor_running,
+        is_sync_running, stop_monitor, stop_sync,
     },
-    onedrive_command, update_account_status,
+    onedrive_command,
     render::{refresh_content, show_toast},
     state::AppState,
+    update_account_status,
 };
 use crate::{
     adapter::{
         graph::start_apply_preview_change,
-        onedrive::{start_forced_sync, start_monitor, start_preview, start_sync},
+        onedrive::{start_forced_sync, start_monitor, start_preview, start_resync, start_sync},
     },
     operation::OperationKind,
     profile::{Account, AccountStatus, SyncMode, is_authenticated, load_profile_sync_mode},
@@ -43,7 +44,7 @@ pub(in crate::app) fn start_manual_one_time_sync_for_account(
     state: Rc<AppState>,
     account: Account,
 ) {
-    start_one_time_sync(state, account, false);
+    start_one_time_sync(state, account, SyncStartMode::Normal);
 }
 
 pub(in crate::app) fn start_or_stop_manual_one_time_sync_for_account(
@@ -69,10 +70,21 @@ pub(in crate::app) fn start_forced_one_time_sync_for_account(
     state: Rc<AppState>,
     account: Account,
 ) {
-    start_one_time_sync(state, account, true);
+    start_one_time_sync(state, account, SyncStartMode::Force);
 }
 
-fn start_one_time_sync(state: Rc<AppState>, account: Account, force_big_delete: bool) {
+pub(in crate::app) fn start_resync_for_account(state: Rc<AppState>, account: Account) {
+    start_one_time_sync(state, account, SyncStartMode::Resync);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncStartMode {
+    Normal,
+    Force,
+    Resync,
+}
+
+fn start_one_time_sync(state: Rc<AppState>, account: Account, mode: SyncStartMode) {
     if is_sync_running(&state, &account.id) {
         show_toast(&state, "同步正在运行，请等待完成");
         return;
@@ -94,14 +106,19 @@ fn start_one_time_sync(state: Rc<AppState>, account: Account, force_big_delete: 
     state.transfers.clear();
     refresh_content(&state);
     let account_id = account.id.clone();
-    let start_result = if force_big_delete {
-        start_forced_sync(account, onedrive_command(&state), state.sender.clone())
-    } else {
-        start_sync(account, onedrive_command(&state), state.sender.clone())
+    let command = onedrive_command(&state);
+    let sender = state.sender.clone();
+    let start_result = match mode {
+        SyncStartMode::Normal => start_sync(account, command, sender),
+        SyncStartMode::Force => start_forced_sync(account, command, sender),
+        SyncStartMode::Resync => start_resync(account, command, sender),
     };
     match start_result {
         Ok(handle) => {
-            state.operation_handles.borrow_mut().insert(account_id, handle);
+            state
+                .operation_handles
+                .borrow_mut()
+                .insert(account_id, handle);
         }
         Err(error) => {
             finish_operation(&state, &account_id);
@@ -140,7 +157,10 @@ pub(in crate::app) fn start_preview_for_account(state: Rc<AppState>, account: Ac
         state.sender.clone(),
     ) {
         Ok(handle) => {
-            state.operation_handles.borrow_mut().insert(account.id.clone(), handle);
+            state
+                .operation_handles
+                .borrow_mut()
+                .insert(account.id.clone(), handle);
         }
         Err(error) => {
             finish_operation(&state, &account.id);
@@ -250,7 +270,10 @@ pub(in crate::app) fn start_monitor_for_account(state: Rc<AppState>, account: Ac
         state.sender.clone(),
     ) {
         Ok(handle) => {
-            state.operation_handles.borrow_mut().insert(account.id.clone(), handle);
+            state
+                .operation_handles
+                .borrow_mut()
+                .insert(account.id.clone(), handle);
             state.transfers.clear();
             refresh_content(&state);
         }
@@ -278,4 +301,3 @@ pub(in crate::app) fn open_sync_dir_for_account(
         show_toast(state, &format!("打开同步目录失败: {error}"));
     }
 }
-

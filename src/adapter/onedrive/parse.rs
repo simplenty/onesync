@@ -25,7 +25,6 @@ const fn pattern(
     }
 }
 
-
 const CHANGE_PATTERNS: &[ChangePattern] = &[
     pattern(
         "Downloading file:",
@@ -482,16 +481,19 @@ mod tests {
             .is_none()
         );
         assert!(
-            parse_preview_change_line("DRY RUN: Not updating hash files as --dry-run has been used")
-                .is_none()
+            parse_preview_change_line(
+                "DRY RUN: Not updating hash files as --dry-run has been used"
+            )
+            .is_none()
         );
         assert!(parse_preview_change_line("Sync with Microsoft OneDrive is complete").is_none());
     }
 
     #[test]
     fn preview_move_line_captures_source_and_target_paths() {
-        let change = parse_preview_change_line("Moving file: docs/old.txt -> archive/new.txt ... done")
-            .expect("move preview should be parsed");
+        let change =
+            parse_preview_change_line("Moving file: docs/old.txt -> archive/new.txt ... done")
+                .expect("move preview should be parsed");
 
         assert_eq!(change.kind, ChangeKind::Move);
         assert_eq!(change.path, "archive/new.txt");
@@ -502,7 +504,9 @@ mod tests {
     #[test]
     fn ignores_status_and_scan_output() {
         assert!(parse_file_change_line("Configuration file successfully loaded").is_none());
-        assert!(parse_file_change_line("Processing: .onesync-parser-test/move-target.txt").is_none());
+        assert!(
+            parse_file_change_line("Processing: .onesync-parser-test/move-target.txt").is_none()
+        );
         assert!(parse_file_change_line("Uploading filesystem metadata cache").is_none());
         assert!(parse_file_change_line("Downloading filesystem metadata cache").is_none());
         assert!(parse_file_change_line("Deleting itemized sync database entry").is_none());

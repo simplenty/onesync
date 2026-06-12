@@ -94,6 +94,7 @@ fn build_ui(app: &adw::Application) {
         operations: RefCell::new(HashMap::new()),
         previews: RefCell::new(HashMap::new()),
         applying_preview_changes: RefCell::new(std::collections::HashSet::new()),
+        pending_confirmation: RefCell::new(None),
         toast_overlay: toast_overlay.clone(),
         window: window.clone(),
         profile_list,

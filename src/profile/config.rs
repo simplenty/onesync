@@ -26,6 +26,16 @@ pub struct ConfigEdit {
     pub monitor_fullscan_frequency: String,
 }
 
+impl ConfigEdit {
+    #[must_use]
+    pub fn requires_resync_from(&self, next: &Self) -> bool {
+        self.sync_dir != next.sync_dir
+            || self.skip_file != next.skip_file
+            || self.skip_dir != next.skip_dir
+            || normalize_lines(&self.sync_list) != normalize_lines(&next.sync_list)
+    }
+}
+
 #[derive(Debug, Clone)]
 enum ConfigLine {
     Blank,
@@ -112,6 +122,32 @@ impl OneDriveConfig {
         );
     }
 
+    #[must_use]
+    pub fn to_edit(&self) -> ConfigEdit {
+        ConfigEdit {
+            sync_dir: self.single_value("sync_dir").unwrap_or_default(),
+            skip_file: self.values("skip_file"),
+            skip_dir: self.values("skip_dir"),
+            sync_list: self.single_value("sync_list").unwrap_or_default(),
+            download_only: self.bool_value("download_only"),
+            upload_only: self.bool_value("upload_only"),
+            local_first: self.bool_value("local_first"),
+            no_remote_delete: self.bool_value("no_remote_delete"),
+            dry_run: self.bool_value("dry_run"),
+            delay_inotify_processing: self.bool_value("delay_inotify_processing"),
+            rate_limit: self.single_value("rate_limit").unwrap_or_default(),
+            threads: self.single_value("threads").unwrap_or_default(),
+            connect_timeout: self.single_value("connect_timeout").unwrap_or_default(),
+            data_timeout: self.single_value("data_timeout").unwrap_or_default(),
+            dns_timeout: self.single_value("dns_timeout").unwrap_or_default(),
+            operation_timeout: self.single_value("operation_timeout").unwrap_or_default(),
+            monitor_interval: self.single_value("monitor_interval").unwrap_or_default(),
+            monitor_fullscan_frequency: self
+                .single_value("monitor_fullscan_frequency")
+                .unwrap_or_default(),
+        }
+    }
+
     pub fn enable_transfer_metrics(&mut self) {
         self.set_single("display_transfer_metrics", "true");
     }
@@ -127,6 +163,31 @@ impl OneDriveConfig {
 
     fn set_single(&mut self, key: &str, value: &str) {
         self.set_values(key, &[value.to_string()], false);
+    }
+
+    fn values(&self, key: &str) -> Vec<String> {
+        self.lines
+            .iter()
+            .filter_map(|line| match line {
+                ConfigLine::Pair {
+                    key: line_key,
+                    values,
+                } if line_key == key => Some(values),
+                _ => None,
+            })
+            .flat_map(|values| values.iter())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect()
+    }
+
+    fn single_value(&self, key: &str) -> Option<String> {
+        self.values(key).into_iter().next()
+    }
+
+    fn bool_value(&self, key: &str) -> bool {
+        self.single_value(key)
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"))
     }
 
     fn set_optional(&mut self, key: &str, value: &str) {
@@ -214,8 +275,40 @@ pub fn ensure_transfer_metrics_enabled(config_dir: impl AsRef<Path>) -> io::Resu
     config.write_with_backup(config_path)
 }
 
+pub fn read_sync_list(config_dir: impl AsRef<Path>) -> io::Result<String> {
+    let path = config_dir.as_ref().join("sync_list");
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    fs::read_to_string(path)
+}
+
+pub fn write_sync_list(config_dir: impl AsRef<Path>, content: &str) -> io::Result<()> {
+    let config_dir = config_dir.as_ref();
+    fs::create_dir_all(config_dir)?;
+    let path = config_dir.join("sync_list");
+    if content.trim().is_empty() {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    } else {
+        fs::write(path, content)
+    }
+}
+
 fn backup_path(path: &Path) -> PathBuf {
     path.with_extension(format!("bak-{}", unix_timestamp()))
+}
+
+fn normalize_lines(value: &str) -> Vec<String> {
+    value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 fn unquote(value: &str) -> &str {
@@ -279,5 +372,93 @@ mod tests {
         assert!(!rendered.contains("rate_limit"));
         assert!(rendered.contains("upload_only = \"true\""));
         assert!(rendered.contains("no_remote_delete = \"true\""));
+    }
+
+    #[test]
+    fn reads_config_edit_from_existing_config() {
+        let config = OneDriveConfig::parse(
+            "sync_dir = \"~/WorkDrive\"\n\
+skip_file = \"*.tmp\"\n\
+\t\"*.bak\"\n\
+skip_dir = \"node_modules\"\n\
+\t\"target\"\n\
+download_only = \"true\"\n\
+no_remote_delete = \"true\"\n\
+monitor_interval = \"120\"\n\
+monitor_fullscan_frequency = \"6\"\n",
+        );
+
+        let edit = config.to_edit();
+
+        assert_eq!(edit.sync_dir, "~/WorkDrive");
+        assert_eq!(edit.skip_file, vec!["*.tmp", "*.bak"]);
+        assert_eq!(edit.skip_dir, vec!["node_modules", "target"]);
+        assert!(edit.download_only);
+        assert!(!edit.upload_only);
+        assert!(edit.no_remote_delete);
+        assert_eq!(edit.monitor_interval, "120");
+        assert_eq!(edit.monitor_fullscan_frequency, "6");
+    }
+
+    #[test]
+    fn detects_resync_required_for_scope_changes() {
+        let old = ConfigEdit {
+            sync_dir: "~/OneDrive".to_string(),
+            skip_file: vec!["*.tmp".to_string()],
+            skip_dir: vec!["node_modules".to_string()],
+            sync_list: "Documents\nPictures".to_string(),
+            ..ConfigEdit::default()
+        };
+        let same = old.clone();
+        let changed_direction = ConfigEdit {
+            upload_only: true,
+            ..old.clone()
+        };
+        let changed_scope = ConfigEdit {
+            skip_dir: vec!["target".to_string()],
+            ..old.clone()
+        };
+
+        assert!(!old.requires_resync_from(&same));
+        assert!(!old.requires_resync_from(&changed_direction));
+        assert!(old.requires_resync_from(&changed_scope));
+    }
+
+    #[test]
+    fn reads_missing_sync_list_as_empty() {
+        let root =
+            std::env::temp_dir().join(format!("onesync-sync-list-missing-{}", unix_timestamp()));
+        fs::create_dir_all(&root).unwrap();
+
+        let content = read_sync_list(&root).unwrap();
+
+        assert_eq!(content, "");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn writes_and_reads_sync_list() {
+        let root =
+            std::env::temp_dir().join(format!("onesync-sync-list-write-{}", unix_timestamp()));
+        fs::create_dir_all(&root).unwrap();
+
+        write_sync_list(&root, "Documents\nPictures/Trips\n").unwrap();
+        let content = read_sync_list(&root).unwrap();
+
+        assert_eq!(content, "Documents\nPictures/Trips\n");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn removes_sync_list_file_when_content_is_empty() {
+        let root =
+            std::env::temp_dir().join(format!("onesync-sync-list-remove-{}", unix_timestamp()));
+        fs::create_dir_all(&root).unwrap();
+        write_sync_list(&root, "Documents\n").unwrap();
+
+        write_sync_list(&root, "  \n\t\n").unwrap();
+
+        assert!(!root.join("sync_list").exists());
+        let _ = fs::remove_dir_all(root);
     }
 }

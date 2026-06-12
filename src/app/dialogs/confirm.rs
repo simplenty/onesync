@@ -1,14 +1,24 @@
-use super::super::{actions::start_forced_one_time_sync_for_account, state::AppState};
+use super::super::{
+    actions::{start_forced_one_time_sync_for_account, start_resync_for_account},
+    state::AppState,
+};
 use crate::profile::Account;
 use adw::prelude::*;
 use std::rc::Rc;
 
-pub(in crate::app) fn show_warning_window(state: &AppState, title: &str, message: &str) {
+pub(in crate::app) fn show_warning_window(state: Rc<AppState>, title: &str, message: &str) {
     let dialog = adw::AlertDialog::new(Some(title), Some(message));
     dialog.add_response("close", "知道了");
     dialog.set_default_response(Some("close"));
     dialog.set_close_response("close");
-    dialog.present(Some(&state.window));
+    let clear_state = Rc::clone(&state);
+    dialog.choose(
+        Some(&state.window),
+        None::<&gtk::gio::Cancellable>,
+        move |_| {
+            clear_state.pending_confirmation.borrow_mut().take();
+        },
+    );
 }
 
 pub(in crate::app) fn show_big_delete_confirmation(state: Rc<AppState>, account: Account) {
@@ -34,6 +44,32 @@ pub(in crate::app) fn show_big_delete_confirmation(state: Rc<AppState>, account:
                     force_account.clone(),
                 );
             }
+            force_state.pending_confirmation.borrow_mut().take();
+        },
+    );
+}
+
+pub(in crate::app) fn show_resync_confirmation(state: Rc<AppState>, account: Account) {
+    let dialog = adw::AlertDialog::new(
+        Some("执行 resync?"),
+        Some(
+            "onedrive 要求使用 --resync 重建同步状态。\n\n只有在你确认当前本地目录和 OneDrive 云端内容对应同一个账户，并且已理解这可能重新扫描大量文件时，才继续。",
+        ),
+    );
+    dialog.add_responses(&[("cancel", "返回"), ("resync", "执行 resync")]);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+    dialog.set_response_appearance("resync", adw::ResponseAppearance::Suggested);
+    let resync_state = Rc::clone(&state);
+    let resync_account = account.clone();
+    dialog.choose(
+        Some(&state.window),
+        None::<&gtk::gio::Cancellable>,
+        move |response| {
+            if response == "resync" {
+                start_resync_for_account(Rc::clone(&resync_state), resync_account.clone());
+            }
+            resync_state.pending_confirmation.borrow_mut().take();
         },
     );
 }

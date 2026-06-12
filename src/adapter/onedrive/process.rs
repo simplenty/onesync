@@ -1,15 +1,15 @@
+use super::parse::{parse_file_change_line, parse_preview_change_line};
 use super::{
-    command::{add_single_directory_scope, build_command, OneDriveCommandKind},
+    command::{OneDriveCommandKind, add_single_directory_scope, build_command},
     output::{
         combined_output, is_auth_required, parse_confirmation, parse_onedrive_error, parse_version,
     },
 };
 use crate::{
     event::{BackendEvent, ClientCheck, Version},
-    profile::{Account, auth_response_path, auth_url_path, is_authenticated},
     profile::config::ensure_transfer_metrics_enabled,
+    profile::{Account, auth_response_path, auth_url_path, is_authenticated},
 };
-use super::parse::{parse_file_change_line, parse_preview_change_line};
 use std::{
     fs,
     io::{self, BufReader, Read},
@@ -136,7 +136,7 @@ pub fn start_sync(
     binary: String,
     sender: mpsc::Sender<BackendEvent>,
 ) -> io::Result<SyncHandle> {
-    start_sync_with_force(account, binary, sender, false)
+    start_sync_with_options(account, binary, sender, false, false)
 }
 
 pub fn start_forced_sync(
@@ -144,7 +144,15 @@ pub fn start_forced_sync(
     binary: String,
     sender: mpsc::Sender<BackendEvent>,
 ) -> io::Result<SyncHandle> {
-    start_sync_with_force(account, binary, sender, true)
+    start_sync_with_options(account, binary, sender, true, false)
+}
+
+pub fn start_resync(
+    account: Account,
+    binary: String,
+    sender: mpsc::Sender<BackendEvent>,
+) -> io::Result<SyncHandle> {
+    start_sync_with_options(account, binary, sender, false, true)
 }
 
 pub fn start_preview(
@@ -202,18 +210,23 @@ pub fn start_preview(
     })
 }
 
-fn start_sync_with_force(
+fn start_sync_with_options(
     account: Account,
     binary: String,
     sender: mpsc::Sender<BackendEvent>,
     force: bool,
+    resync: bool,
 ) -> io::Result<SyncHandle> {
     ensure_transfer_metrics_enabled(&account.config_dir)?;
 
-    let mut child = build_command(binary, &account, OneDriveCommandKind::Sync { force })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+    let mut child = build_command(
+        binary,
+        &account,
+        OneDriveCommandKind::Sync { force, resync },
+    )
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()?;
 
     let output = attach_readers(&account.id, &mut child, &sender, OutputMode::Live);
     let child = Arc::new(Mutex::new(child));
@@ -375,7 +388,6 @@ pub fn stop_handle(handle: &SyncHandle) -> io::Result<()> {
         .map_err(|_| io::Error::other("failed to lock onedrive process"))?;
     terminate_child(&mut child)
 }
-
 
 fn wait_for_child(child: &Arc<Mutex<Child>>) -> io::Result<bool> {
     loop {
@@ -705,6 +717,69 @@ mod tests {
 
         let args = fs::read_to_string(args_file).unwrap();
         assert!(args.lines().any(|arg| arg == "--force"));
+        assert!(!args.lines().any(|arg| arg == "--resync-auth"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resync_passes_resync_flag_to_onedrive() {
+        use crate::profile::AccountStatus;
+        use std::{
+            env,
+            os::unix::fs::PermissionsExt,
+            sync::mpsc,
+            time::{SystemTime, UNIX_EPOCH},
+        };
+
+        let root = env::temp_dir().join(format!(
+            "onesync-resync-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let config_dir = root.join("profile");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(config_dir.join("config"), "sync_dir = \"~/OneDrive\"\n").unwrap();
+        let args_file = root.join("args");
+        let binary = root.join("fake-onedrive");
+        fs::write(
+            &binary,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n",
+                args_file.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&binary, permissions).unwrap();
+
+        let account = Account {
+            id: "resync".to_string(),
+            name: "Resync".to_string(),
+            email: String::new(),
+            config_dir: config_dir.to_string_lossy().to_string(),
+            sync_dir: "~/OneDrive".to_string(),
+            status: AccountStatus::Authenticated,
+        };
+        let (sender, receiver) = mpsc::channel();
+        let _handle = start_resync(account, binary.to_string_lossy().to_string(), sender).unwrap();
+        let event = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(matches!(
+            event,
+            BackendEvent::SyncFinished {
+                success: true,
+                requested_stop: false,
+                ..
+            }
+        ));
+
+        let args = fs::read_to_string(args_file).unwrap();
+        assert!(args.lines().any(|arg| arg == "--resync"));
+        assert!(args.lines().any(|arg| arg == "--resync-auth"));
 
         fs::remove_dir_all(root).unwrap();
     }

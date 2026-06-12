@@ -83,7 +83,7 @@ OneSync 的 UI 应当像一个可靠的系统工具：克制、直接、可预�
 - 传输列表：`TransferList` 管理 `gtk::ListBox` 行、进度条动画、完成/进行中排序、同名传输更新，以及预览变更的应用/放弃按钮。
 - 添加账号窗口：输入名称、账号标识、同步目录，确认后创建 profile 并打开认证窗口。
 - 认证窗口：生成认证链接、显示 auth URL、粘贴 redirect URI，并将回调写入 `auth-response`。
-- 编辑 Profile 窗口：展示名称、账号标识、同步目录、认证状态；支持改名和移除 profile。
+- 编辑 Profile 窗口：使用 GNOME/libadwaita 风格的概览页，根分组标题为“账户设置”。每个 `ActionRow` 展示一个配置对象的摘要，并进入完整子页编辑；`账户信息` 合并 Profile 名称、账号标识、认证状态和同步目录，同步目录通过目录选择器修改，打开前会提示不会移动已有文件及潜在同步风险；`同步范围` 在子页中使用 tab 标签切换完整配置 section；`同步方向` 使用三个单选式 `ActionRow`，且只在“只上传到 OneDrive”时显示用于控制“保护云端文件”的 `Switch`；`自动同步` 使用对称的 `- 数字 +` 步进控件设置检查间隔和完整扫描频率，并在底部提供独立的“恢复默认”按钮。
 - 移除确认窗口：要求精确输入当前 profile 名称后才允许移除。
 - 通用确认窗口：用于大量删除等危险同步操作。
 - 警告窗口：用于展示 onedrive 需要人工确认的状态，例如 `--resync`、大量删除或配置组合风险。
@@ -265,6 +265,7 @@ UI 每 250ms 在主线程轮询接收端，保证 GTK 更新发生在主线程�
 - onedrive 输出中包含登录、授权或 refresh token 失效关键字时，会触发重新认证流程。
 - 网络、未知配置、上传下载失败、CLI 崩溃等输出会映射为中文可操作错误。
 - 输出提示 `--resync`、big delete、download-only cleanup、upload-only + no-remote-delete 时，会弹出人工确认警告。
+- 当 onedrive 输出要求 `--resync` 等人工确认时，OneSync 不把 profile 标记为错误状态；它保留认证状态并展示确认窗口。`--resync` 确认窗口提供“执行 resync”按钮，确认后以 `onedrive --confdir <dir> --sync --verbose --resync` 启动一次同步。
 
 ## 测试覆盖
 

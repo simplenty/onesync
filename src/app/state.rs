@@ -41,6 +41,7 @@ pub(in crate::app) struct AppState {
     pub(in crate::app) sync_button: gtk::Button,
     pub(in crate::app) preview_button: gtk::Button,
     pub(in crate::app) edit_button: gtk::Button,
+    pub(in crate::app) pending_confirmation: RefCell<Option<String>>,
 }
 
 impl AppState {

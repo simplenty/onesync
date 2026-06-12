@@ -5,7 +5,10 @@ use super::{
     status_label, update_account_status,
 };
 use crate::{
-    adapter::{graph::start_account_identity_lookup, onedrive::{OperationHandle, stop_operation}},
+    adapter::{
+        graph::start_account_identity_lookup,
+        onedrive::{OperationHandle, stop_operation},
+    },
     event::{BackendEvent, ConfirmationKind},
     operation::{AccountOperation, OperationKind, OperationPhase},
     profile::{Account, AccountStatus, save_accounts},
@@ -126,14 +129,16 @@ fn drain_backend_events(state: &Rc<AppState>) {
                     handle_auth_required(Rc::clone(state), &account_id, message);
                     continue;
                 }
-                let status = if success || requested_stop {
+                let status = if success || requested_stop || requires_confirmation.is_some() {
                     AccountStatus::Authenticated
                 } else {
                     AccountStatus::Error(message.unwrap_or_else(|| "同步失败".to_string()))
                 };
                 update_account_status(state, &account_id, status);
                 if let Some(kind) = requires_confirmation {
-                    handle_confirmation_required(Rc::clone(state), &account_id, kind);
+                    if state.pending_confirmation.borrow().is_none() {
+                        handle_confirmation_required(Rc::clone(state), &account_id, kind);
+                    }
                 } else if requested_stop {
                     show_toast(state, "同步已停止");
                 } else if success {
@@ -251,16 +256,7 @@ fn drain_backend_events(state: &Rc<AppState>) {
                 }
             }
             BackendEvent::ConfirmationRequired { account_id, kind } => {
-                if matches!(kind, ConfirmationKind::BigDelete) {
-                    show_toast(state, kind.user_message());
-                } else if state
-                    .selected_account_id()
-                    .is_some_and(|id| id == account_id)
-                {
-                    confirm::show_warning_window(state, "需要确认", kind.user_message());
-                } else {
-                    show_toast(state, kind.user_message());
-                }
+                handle_confirmation_required(Rc::clone(state), &account_id, kind);
             }
             BackendEvent::MonitorStopped {
                 account_id,
@@ -276,14 +272,16 @@ fn drain_backend_events(state: &Rc<AppState>) {
                     handle_auth_required(Rc::clone(state), &account_id, message);
                     continue;
                 }
-                let status = if success || requested_stop {
+                let status = if success || requested_stop || requires_confirmation.is_some() {
                     AccountStatus::Authenticated
                 } else {
                     AccountStatus::Error(message.unwrap_or_else(|| "持续同步停止".to_string()))
                 };
                 update_account_status(state, &account_id, status);
                 if let Some(kind) = requires_confirmation {
-                    handle_confirmation_required(Rc::clone(state), &account_id, kind);
+                    if state.pending_confirmation.borrow().is_none() {
+                        handle_confirmation_required(Rc::clone(state), &account_id, kind);
+                    }
                 } else if requested_stop {
                     show_toast(state, "持续同步已停止");
                 } else if success {
@@ -310,6 +308,17 @@ pub(super) fn stop_sync(state: &AppState, account_id: &str, message: &str) {
 }
 
 fn handle_confirmation_required(state: Rc<AppState>, account_id: &str, kind: ConfirmationKind) {
+    if state.pending_confirmation.borrow().is_some() {
+        return;
+    }
+    state.pending_confirmation.borrow_mut().replace(account_id.to_string());
+    if matches!(kind, ConfirmationKind::ResyncRequired)
+        && let Some(account) = account_by_id(&state, account_id)
+    {
+        confirm::show_resync_confirmation(state, account);
+        return;
+    }
+
     if matches!(kind, ConfirmationKind::BigDelete)
         && let Some(account) = account_by_id(&state, account_id)
     {
@@ -317,7 +326,7 @@ fn handle_confirmation_required(state: Rc<AppState>, account_id: &str, kind: Con
         return;
     }
 
-    confirm::show_warning_window(&state, "需要确认", kind.user_message());
+    confirm::show_warning_window(state, "需要确认", kind.user_message());
 }
 
 pub(super) fn stop_monitor(state: &AppState, account_id: &str) {
@@ -334,22 +343,30 @@ pub(super) fn stop_monitor(state: &AppState, account_id: &str) {
 }
 
 pub(super) fn stop_all_monitors(state: &AppState) {
-    let sync_handles: Vec<OperationHandle> = state.operation_handles.borrow().values().cloned().collect();
+    let sync_handles: Vec<OperationHandle> =
+        state.operation_handles.borrow().values().cloned().collect();
     for handle in sync_handles {
         let _ = stop_operation(&handle);
     }
-    let handles: Vec<OperationHandle> = state.operation_handles.borrow().values().cloned().collect();
+    let handles: Vec<OperationHandle> =
+        state.operation_handles.borrow().values().cloned().collect();
     for handle in handles {
         let _ = stop_operation(&handle);
     }
 }
 
 pub(super) fn is_monitor_running(state: &AppState, account_id: &str) -> bool {
-    matches!(operation(state, account_id).map(|operation| operation.kind), Some(OperationKind::Monitor))
+    matches!(
+        operation(state, account_id).map(|operation| operation.kind),
+        Some(OperationKind::Monitor)
+    )
 }
 
 pub(super) fn is_sync_running(state: &AppState, account_id: &str) -> bool {
-    matches!(operation(state, account_id).map(|operation| operation.kind), Some(OperationKind::OneTimeSync | OperationKind::Preview))
+    matches!(
+        operation(state, account_id).map(|operation| operation.kind),
+        Some(OperationKind::OneTimeSync | OperationKind::Preview)
+    )
 }
 
 pub(super) fn operation(state: &AppState, account_id: &str) -> Option<AccountOperation> {
