@@ -40,6 +40,42 @@ impl SyncDirectionChoice {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScopeChoice {
+    All,
+    Exclude,
+    Include,
+}
+
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditPage {
+    Overview,
+    AccountLocation,
+    SyncScope,
+    SyncDirection,
+    Monitor,
+    Remove,
+}
+
+impl EditPage {
+    fn from_stack_name(name: &str) -> Self {
+        match name {
+            "account-location" => Self::AccountLocation,
+            "sync-scope" => Self::SyncScope,
+            "sync-direction" => Self::SyncDirection,
+            "monitor" => Self::Monitor,
+            "remove" => Self::Remove,
+            _ => Self::Overview,
+        }
+    }
+    fn is_sub_page(self) -> bool {
+        !matches!(self, Self::Overview)
+    }
+}
+
+
 fn direction_title(choice: SyncDirectionChoice, no_remote_delete: bool) -> String {
     match choice {
         SyncDirectionChoice::Bidirectional => "双向同步".to_string(),
@@ -125,82 +161,22 @@ fn direction_choice_row(
     (row, check)
 }
 
-fn monitor_stepper_row(
+fn monitor_spin_row(
     title: &str,
     subtitle: &str,
-    unit: &str,
     value: &str,
     fallback: f64,
     minimum: f64,
     step: f64,
     can_mutate: bool,
-) -> (adw::ActionRow, gtk::Adjustment) {
-    let current_value = value.trim().parse::<f64>().unwrap_or(fallback);
-    let adjustment = gtk::Adjustment::new(
-        current_value.max(minimum),
-        minimum,
-        86_400.0,
-        step,
-        step * 10.0,
-        0.0,
-    );
-    let value_label = gtk::Label::builder()
-        .label(format!("{:.0}", adjustment.value()))
-        .width_chars(5)
-        .xalign(0.5)
-        .sensitive(can_mutate)
-        .valign(Align::Center)
-        .build();
-    let decrement_button = gtk::Button::with_label("-");
-    decrement_button.set_sensitive(can_mutate);
-    decrement_button.add_css_class("flat");
-    let increment_button = gtk::Button::with_label("+");
-    increment_button.set_sensitive(can_mutate);
-    increment_button.add_css_class("flat");
-
-    let control_box = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(4)
-        .valign(Align::Center)
-        .build();
-    control_box.append(&decrement_button);
-    control_box.append(&value_label);
-    control_box.append(&increment_button);
-
-    let row = adw::ActionRow::builder()
-        .title(title)
-        .subtitle(subtitle)
-        .build();
-    row.add_suffix(&control_box);
-    row.add_suffix(
-        &gtk::Label::builder()
-            .label(unit)
-            .css_classes(["dim-label"])
-            .valign(Align::Center)
-            .build(),
-    );
-
-    let adjustment_for_decrement = adjustment.clone();
-    decrement_button.connect_clicked(move |_| {
-        adjustment_for_decrement.set_value(
-            (adjustment_for_decrement.value() - adjustment_for_decrement.step_increment())
-                .max(adjustment_for_decrement.lower()),
-        );
-    });
-
-    let adjustment_for_increment = adjustment.clone();
-    increment_button.connect_clicked(move |_| {
-        adjustment_for_increment.set_value(
-            (adjustment_for_increment.value() + adjustment_for_increment.step_increment())
-                .min(adjustment_for_increment.upper()),
-        );
-    });
-
-    adjustment.connect_value_changed(move |adjustment| {
-        value_label.set_label(&format!("{:.0}", adjustment.value()));
-    });
-
-    (row, adjustment)
+) -> adw::SpinRow {
+    let current = value.trim().parse::<f64>().unwrap_or(fallback).max(minimum);
+    let adjustment = gtk::Adjustment::new(current, minimum, 86_400.0, step, step * 10.0, 0.0);
+    let row = adw::SpinRow::new(Some(&adjustment), 1.0, 0);
+    row.set_title(title);
+    row.set_subtitle(subtitle);
+    row.set_sensitive(can_mutate);
+    row
 }
 
 fn selected_direction_from_checks(
@@ -218,6 +194,23 @@ fn selected_direction_from_checks(
         SyncDirectionChoice::Bidirectional
     }
 }
+
+fn selected_scope_from_checks(
+    all_check: &gtk::CheckButton,
+    exclude_check: &gtk::CheckButton,
+    include_check: &gtk::CheckButton,
+) -> ScopeChoice {
+    if exclude_check.is_active() {
+        ScopeChoice::Exclude
+    } else if include_check.is_active() {
+        ScopeChoice::Include
+    } else if all_check.is_active() {
+        ScopeChoice::All
+    } else {
+        ScopeChoice::All
+    }
+}
+
 
 pub(in crate::app) fn show_add_account_dialog(state: Rc<AppState>) {
     let dialog = adw::Window::builder()
@@ -434,6 +427,31 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     edit_scrolled.set_child(Some(&edit_clamp));
     stack.add_named(&edit_scrolled, Some("edit"));
 
+    let current_page = Rc::new(Cell::new(EditPage::Overview));
+    let remove_mode = Rc::new(Cell::new(false));
+
+    let refresh_header: Rc<dyn Fn()> = Rc::new({
+        let save_button = save_button.clone();
+        let current_page = Rc::clone(&current_page);
+        let remove_mode = Rc::clone(&remove_mode);
+        let close_button = close_button.clone();
+        move || {
+            let page = current_page.get();
+            let in_remove = remove_mode.get();
+            close_button.set_label(if page.is_sub_page() { "返回" } else { "关闭" });
+            if in_remove {
+                save_button.set_label("移除账户");
+                save_button.remove_css_class("suggested-action");
+                save_button.add_css_class("destructive-action");
+            } else {
+                save_button.set_label("保存");
+                save_button.remove_css_class("destructive-action");
+                save_button.add_css_class("suggested-action");
+            }
+        }
+    });
+
+
     let account_location_page = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(16)
@@ -492,9 +510,13 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     account_location_scrolled.set_child(Some(&account_location_clamp));
     stack.add_named(&account_location_scrolled, Some("account-location"));
 
+    let cp_for_account_location = Rc::clone(&current_page);
+    let refresh_for_account_location = Rc::clone(&refresh_header);
     let stack_for_account_location = stack.clone();
     account_location_row.connect_activated(move |_| {
         stack_for_account_location.set_visible_child_name("account-location");
+        cp_for_account_location.set(EditPage::AccountLocation);
+        (refresh_for_account_location)();
     });
 
     let sync_dir_dialog = dialog.clone();
@@ -548,16 +570,42 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
         "决定这个 Profile 参与同步的路径集合。范围变化后通常需要重新同步状态。",
     ));
 
-    let scope_stack = gtk::Stack::new();
-    scope_stack.set_transition_type(gtk::StackTransitionType::None);
-    scope_stack.set_vexpand(true);
-    let scope_switcher = gtk::StackSwitcher::new();
-    scope_switcher.set_stack(Some(&scope_stack));
-    scope_switcher.set_sensitive(can_mutate && config_available);
-    scope_switcher.set_halign(Align::Fill);
-    scope_page.append(&scope_switcher);
+    let initial_scope = if !original_config_edit.sync_list.trim().is_empty() {
+        ScopeChoice::Include
+    } else if !original_config_edit.skip_file.is_empty()
+        || !original_config_edit.skip_dir.is_empty()
+    {
+        ScopeChoice::Exclude
+    } else {
+        ScopeChoice::All
+    };
+    let scope_group = adw::PreferencesGroup::builder().title("同步范围").build();
+    let (all_choice_row, all_check) = direction_choice_row(
+        "全部同步",
+        "同步目录中的所有内容；onedrive 仍会应用自身默认的临时文件忽略规则。",
+        matches!(initial_scope, ScopeChoice::All),
+        can_mutate && config_available,
+    );
+    let (exclude_choice_row, exclude_check) = direction_choice_row(
+        "忽略内容",
+        "用 skip_file 和 skip_dir 排除不需要同步的文件或目录。",
+        matches!(initial_scope, ScopeChoice::Exclude),
+        can_mutate && config_available,
+    );
+    let (include_choice_row, include_check) = direction_choice_row(
+        "只同步指定",
+        "仅同步 sync_list 中列出的相对路径。",
+        matches!(initial_scope, ScopeChoice::Include),
+        can_mutate && config_available,
+    );
+    exclude_check.set_group(Some(&all_check));
+    include_check.set_group(Some(&all_check));
+    scope_group.add(&all_choice_row);
+    scope_group.add(&exclude_choice_row);
+    scope_group.add(&include_choice_row);
+    scope_page.append(&scope_group);
 
-    let all_scope_page = scope_section_box(
+    let all_content = scope_section_box(
         "全部同步",
         Some("同步目录中的所有内容；onedrive 仍会应用自身默认的临时文件忽略规则。"),
     );
@@ -592,20 +640,60 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     );
     include_scope_page.append(&include_paths_page);
 
-    scope_stack.add_titled(&all_scope_page, Some("all"), "全部同步");
-    scope_stack.add_titled(&exclude_scope_page, Some("exclude"), "忽略内容");
-    scope_stack.add_titled(&include_scope_page, Some("include"), "只同步指定");
-    if !original_config_edit.sync_list.trim().is_empty() {
-        scope_stack.set_visible_child_name("include");
-    } else if !original_config_edit.skip_file.is_empty()
-        || !original_config_edit.skip_dir.is_empty()
-    {
-        scope_stack.set_visible_child_name("exclude");
-    } else {
-        scope_stack.set_visible_child_name("all");
-    }
-    scope_stack.set_sensitive(can_mutate && config_available);
-    scope_page.append(&scope_stack);
+    let initial_is_exclude = matches!(initial_scope, ScopeChoice::Exclude);
+    let initial_is_include = matches!(initial_scope, ScopeChoice::Include);
+    all_content.set_visible(!initial_is_exclude && !initial_is_include);
+    exclude_scope_page.set_visible(initial_is_exclude);
+    include_scope_page.set_visible(initial_is_include);
+    scope_page.append(&all_content);
+    scope_page.append(&exclude_scope_page);
+    scope_page.append(&include_scope_page);
+
+    let all_content_show = all_content.clone();
+    let excl_content_show = exclude_scope_page.clone();
+    let incl_content_show = include_scope_page.clone();
+    all_check.connect_toggled(move |check| {
+        if check.is_active() {
+            all_content_show.set_visible(true);
+            excl_content_show.set_visible(false);
+            incl_content_show.set_visible(false);
+        }
+    });
+
+    let all_content_hide = all_content.clone();
+    let excl_content_show2 = exclude_scope_page.clone();
+    let incl_content_hide = include_scope_page.clone();
+    exclude_check.connect_toggled(move |check| {
+        if check.is_active() {
+            all_content_hide.set_visible(false);
+            excl_content_show2.set_visible(true);
+            incl_content_hide.set_visible(false);
+        }
+    });
+
+    let all_content_hide2 = all_content.clone();
+    let excl_content_hide = exclude_scope_page.clone();
+    let incl_content_show2 = include_scope_page.clone();
+    include_check.connect_toggled(move |check| {
+        if check.is_active() {
+            all_content_hide2.set_visible(false);
+            excl_content_hide.set_visible(false);
+            incl_content_show2.set_visible(true);
+        }
+    });
+
+    let all_check_row = all_check.clone();
+    all_choice_row.connect_activated(move |_| {
+        all_check_row.set_active(true);
+    });
+    let exclude_check_row = exclude_check.clone();
+    exclude_choice_row.connect_activated(move |_| {
+        exclude_check_row.set_active(true);
+    });
+    let include_check_row = include_check.clone();
+    include_choice_row.connect_activated(move |_| {
+        include_check_row.set_active(true);
+    });
 
     let scope_scrolled = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
@@ -619,11 +707,14 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     scope_scrolled.set_child(Some(&scope_clamp));
     stack.add_named(&scope_scrolled, Some("sync-scope"));
 
+    let cp_for_sync_scope = Rc::clone(&current_page);
+    let refresh_for_sync_scope = Rc::clone(&refresh_header);
     let stack_for_scope = stack.clone();
     scope_row.connect_activated(move |_| {
         stack_for_scope.set_visible_child_name("sync-scope");
+        cp_for_sync_scope.set(EditPage::SyncScope);
+        (refresh_for_sync_scope)();
     });
-
     let direction_page = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(16)
@@ -707,9 +798,13 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     direction_scrolled.set_child(Some(&direction_clamp));
     stack.add_named(&direction_scrolled, Some("sync-direction"));
 
+    let cp_for_sync_direction = Rc::clone(&current_page);
+    let refresh_for_sync_direction = Rc::clone(&refresh_header);
     let stack_for_direction = stack.clone();
     direction_row.connect_activated(move |_| {
         stack_for_direction.set_visible_child_name("sync-direction");
+        cp_for_sync_direction.set(EditPage::SyncDirection);
+        (refresh_for_sync_direction)();
     });
 
     let monitor_page = gtk::Box::builder()
@@ -733,20 +828,18 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
                 .trim()
                 .is_empty(),
     ));
-    let (monitor_interval_row, monitor_interval_adjustment) = monitor_stepper_row(
+    let monitor_interval_row = monitor_spin_row(
         "检查间隔",
-        "持续同步每隔多久检查一次变更。",
-        "秒",
+        "持续同步每隔多久检查一次变更（单位：秒）。",
         &original_config_edit.monitor_interval,
         300.0,
         1.0,
         30.0,
         can_mutate && config_available,
     );
-    let (monitor_fullscan_row, monitor_fullscan_adjustment) = monitor_stepper_row(
+    let monitor_fullscan_row = monitor_spin_row(
         "完整扫描",
-        "每多少次检查后执行一次完整扫描。",
-        "次",
+        "每多少次检查后执行一次完整扫描（单位：次）。",
         &original_config_edit.monitor_fullscan_frequency,
         12.0,
         0.0,
@@ -781,21 +874,21 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
 
     let monitor_default_for_interval = Rc::clone(&monitor_uses_default);
     let monitor_label_for_interval = monitor_default_label.clone();
-    monitor_interval_adjustment.connect_value_changed(move |_| {
+    monitor_interval_row.adjustment().connect_value_changed(move |_| {
         monitor_default_for_interval.set(false);
         monitor_label_for_interval.set_label("当前使用自定义检查设置");
     });
 
     let monitor_default_for_fullscan = Rc::clone(&monitor_uses_default);
     let monitor_label_for_fullscan = monitor_default_label.clone();
-    monitor_fullscan_adjustment.connect_value_changed(move |_| {
+    monitor_fullscan_row.adjustment().connect_value_changed(move |_| {
         monitor_default_for_fullscan.set(false);
         monitor_label_for_fullscan.set_label("当前使用自定义检查设置");
     });
 
     let monitor_default_for_reset = Rc::clone(&monitor_uses_default);
-    let monitor_interval_for_reset = monitor_interval_adjustment.clone();
-    let monitor_fullscan_for_reset = monitor_fullscan_adjustment.clone();
+    let monitor_interval_for_reset = monitor_interval_row.clone();
+    let monitor_fullscan_for_reset = monitor_fullscan_row.clone();
     let monitor_label_for_reset = monitor_default_label.clone();
     monitor_reset_button.connect_clicked(move |_| {
         monitor_interval_for_reset.set_value(300.0);
@@ -816,9 +909,13 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     monitor_scrolled.set_child(Some(&monitor_clamp));
     stack.add_named(&monitor_scrolled, Some("monitor"));
 
+    let cp_for_monitor = Rc::clone(&current_page);
+    let refresh_for_monitor = Rc::clone(&refresh_header);
     let stack_for_monitor = stack.clone();
     monitor_row.connect_activated(move |_| {
         stack_for_monitor.set_visible_child_name("monitor");
+        cp_for_monitor.set(EditPage::Monitor);
+        (refresh_for_monitor)();
     });
 
     let danger_group = adw::PreferencesGroup::builder().title("危险操作").build();
@@ -897,31 +994,31 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     stack.add_named(&remove_content, Some("remove"));
     stack.set_visible_child_name("edit");
 
-    let remove_mode = Rc::new(Cell::new(false));
     let expected_remove_name = account.name.clone();
-
-    let close_dialog = dialog.clone();
+    let _close_save_button = save_button.clone();
     let close_stack = stack.clone();
-    let close_save_button = save_button.clone();
-    let close_mode = Rc::clone(&remove_mode);
-    close_button.connect_clicked(move |button| {
-        if close_mode.get() {
-            close_mode.set(false);
+    let close_dialog = dialog.clone();
+    let close_current = Rc::clone(&current_page);
+    let close_remove = Rc::clone(&remove_mode);
+    let close_refresh = Rc::clone(&refresh_header);
+    close_button.connect_clicked(move |_| {
+        let name = close_stack.visible_child_name().as_deref().unwrap_or("").to_string();
+        let page = EditPage::from_stack_name(&name);
+        if close_remove.get() {
+            close_remove.set(false);
             close_stack.set_visible_child_name("edit");
-            button.set_label("关闭");
-            close_save_button.set_label("保存");
-            close_save_button.remove_css_class("destructive-action");
-            close_save_button.add_css_class("suggested-action");
-            close_save_button.set_sensitive(true);
+            close_current.set(EditPage::Overview);
+            (close_refresh)();
             return;
         }
-        if close_stack.visible_child_name().as_deref() != Some("edit") {
+        if page.is_sub_page() {
             close_stack.set_visible_child_name("edit");
+            close_current.set(EditPage::Overview);
+            (close_refresh)();
             return;
         }
         close_dialog.close();
     });
-
     let save_state = Rc::clone(&state);
     let save_dialog = dialog.clone();
     let save_account_id = account.id.clone();
@@ -961,7 +1058,7 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
             match collect_config_edit(
                 &original_config_edit,
                 &sync_dir_row,
-                &scope_stack,
+                &all_check, &exclude_check, &include_check,
                 &skip_file_list,
                 &skip_dir_list,
                 &sync_list_list,
@@ -969,8 +1066,8 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
                 &download_check,
                 &upload_check,
                 &no_remote_delete_switch,
-                &monitor_interval_adjustment,
-                &monitor_fullscan_adjustment,
+                &monitor_interval_row,
+                &monitor_fullscan_row,
                 &monitor_uses_default,
             ) {
                 Ok(edit) => Some(edit),
@@ -1055,11 +1152,13 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     let remove_state = Rc::clone(&state);
     let remove_account = account.clone();
     let remove_stack = stack.clone();
-    let remove_close_button = close_button.clone();
+    let _remove_close_button = close_button.clone();
     let remove_save_button = save_button.clone();
     let remove_mode_for_row = Rc::clone(&remove_mode);
     let remove_entry_for_row = remove_name_entry.clone();
     let expected_remove_name_for_row = expected_remove_name.clone();
+    let remove_refresh = Rc::clone(&refresh_header);
+    let current_page_remove = Rc::clone(&current_page);
     remove_row.connect_activated(move |_| {
         if !can_mutate_profile(&remove_state, &remove_account) {
             show_toast(&remove_state, "请先停止该账户的认证、同步或持续同步");
@@ -1067,11 +1166,9 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
         }
         remove_mode_for_row.set(true);
         remove_entry_for_row.set_text("");
+        current_page_remove.set(EditPage::Remove);
         remove_stack.set_visible_child_name("remove");
-        remove_close_button.set_label("返回");
-        remove_save_button.set_label("移除账户");
-        remove_save_button.remove_css_class("suggested-action");
-        remove_save_button.add_css_class("destructive-action");
+        (remove_refresh)();
         remove_save_button.set_sensitive(remove_confirmation_matches(
             &expected_remove_name_for_row,
             &remove_entry_for_row.text(),
@@ -1296,7 +1393,9 @@ fn split_lines(value: &str) -> Vec<String> {
 fn collect_config_edit(
     original: &ConfigEdit,
     sync_dir_row: &adw::EntryRow,
-    scope_stack: &gtk::Stack,
+    all_check: &gtk::CheckButton,
+    exclude_check: &gtk::CheckButton,
+    include_check: &gtk::CheckButton,
     skip_file_list: &gtk::ListBox,
     skip_dir_list: &gtk::ListBox,
     sync_list_list: &gtk::ListBox,
@@ -1304,8 +1403,8 @@ fn collect_config_edit(
     download_check: &gtk::CheckButton,
     upload_check: &gtk::CheckButton,
     no_remote_delete_switch: &gtk::Switch,
-    monitor_interval_adjustment: &gtk::Adjustment,
-    monitor_fullscan_adjustment: &gtk::Adjustment,
+    monitor_interval_row: &adw::SpinRow,
+    monitor_fullscan_row: &adw::SpinRow,
     monitor_uses_default: &Cell<bool>,
 ) -> Result<ConfigEdit, String> {
     let sync_dir = sync_dir_row.text().trim().to_string();
@@ -1316,14 +1415,14 @@ fn collect_config_edit(
     let monitor_interval = if monitor_uses_default.get() {
         String::new()
     } else {
-        (monitor_interval_adjustment.value().round() as i32)
+        (monitor_interval_row.value().round() as i32)
             .max(1)
             .to_string()
     };
     let monitor_fullscan_frequency = if monitor_uses_default.get() {
         String::new()
     } else {
-        (monitor_fullscan_adjustment.value().round() as i32)
+        (monitor_fullscan_row.value().round() as i32)
             .max(0)
             .to_string()
     };
@@ -1333,18 +1432,18 @@ fn collect_config_edit(
     edit.monitor_interval = monitor_interval;
     edit.monitor_fullscan_frequency = monitor_fullscan_frequency;
 
-    match scope_stack.visible_child_name().as_deref() {
-        Some("exclude") => {
+    match selected_scope_from_checks(all_check, exclude_check, include_check) {
+        ScopeChoice::Exclude => {
             edit.skip_file = collect_rule_values(skip_file_list);
             edit.skip_dir = collect_rule_values(skip_dir_list);
             edit.sync_list.clear();
         }
-        Some("include") => {
+        ScopeChoice::Include => {
             edit.skip_file.clear();
             edit.skip_dir.clear();
             edit.sync_list = collect_rule_values(sync_list_list).join("\n");
         }
-        _ => {
+        ScopeChoice::All => {
             edit.skip_file.clear();
             edit.skip_dir.clear();
             edit.sync_list.clear();
