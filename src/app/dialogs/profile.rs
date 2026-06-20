@@ -258,7 +258,6 @@ pub(in crate::app) fn show_add_account_dialog(state: Rc<AppState>) {
         .build();
     let cancel_button = gtk::Button::with_label("取消");
     let add_button = gtk::Button::with_label("继续认证");
-    add_button.add_css_class("suggested-action");
     actions.append(&cancel_button);
     actions.append(&add_button);
     content.append(&actions);
@@ -329,7 +328,6 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     header.set_show_end_title_buttons(false);
     let close_button = gtk::Button::with_label("关闭");
     let save_button = gtk::Button::with_label("保存");
-    save_button.add_css_class("suggested-action");
     header.pack_start(&close_button);
     header.pack_end(&save_button);
     root.append(&header);

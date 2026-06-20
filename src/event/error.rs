@@ -40,11 +40,11 @@ pub enum BackendError {
 
     // Graph / preview application
     /// Applying a preview change via Graph failed.
-    ApplyFailed,
-    /// Reconciling sync state after an apply failed.
-    ReconcileFailed,
+   ApplyFailed(String),
+   /// Reconciling sync state after an apply failed.
+    ReconcileFailed(String),
 
-    // account identity
+   // account identity
     /// Reading the Microsoft account identity failed. Carries the raw error.
     IdentityLookupFailed(String),
 

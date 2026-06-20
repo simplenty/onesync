@@ -95,7 +95,6 @@ pub(in crate::app) fn show_auth_dialog(state: Rc<AppState>, account: Account) {
         .halign(Align::End)
         .build();
     let finish_button = gtk::Button::with_label("提交回调");
-    finish_button.add_css_class("suggested-action");
     actions.append(&finish_button);
     content.append(&actions);
 

@@ -28,9 +28,9 @@ pub(in crate::app) fn backend_error_message(error: &BackendError) -> String {
         }
         BackendError::MonitorInaccessible => "无法访问持续同步进程".to_string(),
         BackendError::MonitorPollFailed(detail) => format!("轮询持续同步进程失败: {detail}"),
-        BackendError::ApplyFailed => "应用失败，请稍后重试".to_string(),
-        BackendError::ReconcileFailed => "同步状态更新失败，请稍后重试".to_string(),
-        BackendError::IdentityLookupFailed(detail) => {
+       BackendError::ApplyFailed(detail) => format!("应用失败：{detail}"),
+        BackendError::ReconcileFailed(detail) => format!("同步状态更新失败：{detail}"),
+       BackendError::IdentityLookupFailed(detail) => {
             format!("无法读取 Microsoft 账号信息: {detail}")
         }
         BackendError::DuplicateAccountName => "账户名称已存在".to_string(),

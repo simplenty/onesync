@@ -384,7 +384,7 @@ fn build_preview_row(change: PreviewChange) -> (gtk::ListBoxRow, PreviewRow) {
     let accept_button = gtk::Button::builder()
         .icon_name("object-select-symbolic")
         .tooltip_text("应用该变更")
-        .css_classes(["flat", "suggested-action"])
+        .css_classes(["flat"])
         .build();
     accept_button.set_widget_name(&change.id);
 

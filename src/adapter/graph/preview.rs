@@ -1,8 +1,8 @@
 use super::identity::graph_access_token;
 use crate::event::{BackendError, BackendEvent};
 use crate::{
-    profile::Account,
     event::payload::{PreviewAction, PreviewChange},
+    profile::Account,
     utils::expand_home,
 };
 use reqwest::blocking::{Client, Response};
@@ -46,9 +46,11 @@ pub fn start_apply_preview_change(
             .and_then(|_| finish_graph_apply_with_reconcile(&account, &change, binary, &sender));
         let _ = sender.send(BackendEvent::PreviewApplyFinished {
             account_id: account.id,
-           change_id,
-           success: result.is_ok(),
-            error: result.err().map(|_| BackendError::ApplyFailed),
+            change_id,
+            success: result.is_ok(),
+            error: result
+                .err()
+                .map(|e| BackendError::ApplyFailed(e.to_string())),
         });
     });
 }
@@ -92,15 +94,18 @@ fn finish_graph_apply_with_reconcile(
         scope: scope.clone(),
     });
 
-    let reconcile = crate::adapter::onedrive::reconcile_preview_change(account, binary.clone(), &change.path)
-        .and_then(|_| crate::adapter::onedrive::display_reconcile_status(account, binary, &change.path));
+    let reconcile =
+        crate::adapter::onedrive::reconcile_preview_change(account, binary.clone(), &change.path)
+            .and_then(|_| {
+                crate::adapter::onedrive::display_reconcile_status(account, binary, &change.path)
+            });
 
     let success = reconcile.is_ok();
-    let error = reconcile
-        .as_ref()
-        .err()
-        .map(|_| BackendError::ReconcileFailed);
-    let _ = sender.send(BackendEvent::PreviewReconcileFinished {
+   let error = reconcile
+       .as_ref()
+       .err()
+        .map(|e| BackendError::ReconcileFailed(e.to_string()));
+   let _ = sender.send(BackendEvent::PreviewReconcileFinished {
         account_id: account.id.clone(),
         change_id: change.id.clone(),
         success,
@@ -419,11 +424,23 @@ fn get_drive_item(client: &Client, token: &str, path: &str) -> io::Result<DriveI
 fn local_path(account: &Account, path: &str) -> PathBuf {
     expand_home(&account.sync_dir).join(path.trim_start_matches("./"))
 }
-
-fn response_to_io(result: Result<Response, reqwest::Error>) -> io::Result<Response> {
-    result
-        .and_then(reqwest::blocking::Response::error_for_status)
-        .map_err(io::Error::other)
+pub(crate) fn response_to_io(result: Result<Response, reqwest::Error>) -> io::Result<Response> {
+    let response = result.map_err(io::Error::other)?;
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    let status = response.status();
+    let url = response.url().to_string();
+    let body = response.text().unwrap_or_default();
+    let detail = if body.trim().is_empty() {
+        format!("{status} requesting: {url}")
+    } else {
+        format!(
+            "{status} requesting: {url}
+Response: {body}"
+        )
+    };
+    Err(io::Error::other(detail))
 }
 
 fn graph_path(path: &str) -> String {
@@ -458,8 +475,8 @@ fn split_parent_and_name(path: &str) -> (String, String) {
 mod tests {
     use super::*;
     use crate::{
-        profile::{Account, AccountStatus},
         event::payload::{ChangeDirection, ChangeKind, PreviewIntent, PreviewState},
+        profile::{Account, AccountStatus},
     };
     use std::{fs, io::Cursor, sync::mpsc};
 
