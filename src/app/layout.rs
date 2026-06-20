@@ -21,6 +21,7 @@ pub(in crate::app) struct ContentWidgets {
     pub(in crate::app) sync_button: gtk::Button,
     pub(in crate::app) preview_button: gtk::Button,
     pub(in crate::app) edit_button: gtk::Button,
+    pub(in crate::app) auth_button: gtk::Button,
 }
 
 pub(in crate::app) struct ProfileContextPopover {
@@ -137,7 +138,9 @@ pub(in crate::app) fn build_content_widgets() -> (adw::ToolbarView, ContentWidge
     actions.append(&mode_dropdown);
     actions.append(&sync_button);
     actions.append(&preview_button);
+    let auth_button = command_button("dialog-password-symbolic", "认证");
 
+    actions.append(&auth_button);
     let account_menu_button = gtk::MenuButton::builder()
         .icon_name("view-more-symbolic")
         .tooltip_text("账户操作")
@@ -180,6 +183,7 @@ pub(in crate::app) fn build_content_widgets() -> (adw::ToolbarView, ContentWidge
             mode_dropdown,
             sync_button,
             preview_button,
+            auth_button,
             edit_button,
         },
     )

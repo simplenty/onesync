@@ -13,7 +13,7 @@ use super::super::{
 use crate::event::BackendError;
 use crate::profile::remove_profile_sync_mode;
 use crate::profile::{
-    Account, ConfigEdit, OneDriveConfig, create_account, read_sync_list,
+    Account, AccountStatus, ConfigEdit, OneDriveConfig, create_account, read_sync_list,
     remove_confirmation_matches, save_accounts, suggested_account_name, suggested_sync_dir,
     write_sync_list,
 };
@@ -150,7 +150,7 @@ fn direction_choice_row(
     let row = adw::ActionRow::builder()
         .title(title)
         .subtitle(subtitle)
-        .activatable(can_mutate)
+        .activatable(can_mutate || !matches!(account.status, AccountStatus::Authenticated))
         .build();
     let check = gtk::CheckButton::builder()
         .active(active)
@@ -371,7 +371,7 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     let account_location_row = adw::ActionRow::builder()
         .title("账户信息")
         .subtitle(account_location_summary(&account, &original_config_edit))
-        .activatable(can_mutate)
+        .activatable(can_mutate || !matches!(account.status, AccountStatus::Authenticated))
         .build();
     account_location_row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
     overview_group.add(&account_location_row);
@@ -920,11 +920,11 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     let remove_row = adw::ActionRow::builder()
         .title("移除 Profile")
         .subtitle("只从 OneSync 移除，不删除云端或本地文件")
-        .activatable(can_mutate)
+        .activatable(can_mutate || !matches!(account.status, AccountStatus::Authenticated))
         .build();
     remove_row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
     danger_group.add(&remove_row);
-    danger_group.set_visible(can_mutate);
+    danger_group.set_visible(can_mutate || !matches!(account.status, AccountStatus::Authenticated));
     content.append(&danger_group);
 
     let remove_content = gtk::Box::builder()

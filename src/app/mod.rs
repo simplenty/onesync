@@ -114,6 +114,7 @@ fn build_ui(app: &adw::Application) {
         sync_button: content_widgets.sync_button,
         preview_button: content_widgets.preview_button,
         edit_button: content_widgets.edit_button,
+        auth_button: content_widgets.auth_button,
     });
 
     let sidebar = build_sidebar(Rc::clone(&state));
@@ -191,6 +192,18 @@ fn connect_actions(state: Rc<AppState>) {
             return;
         };
         dialogs::profile::show_edit_profile_dialog(Rc::clone(&edit_state), account);
+    });
+
+    let auth_state = Rc::clone(&state);
+    state.auth_button.connect_clicked(move |_| {
+        let Some(account) = auth_state.selected_account() else {
+            show_toast(&auth_state, "请先选择账号");
+            return;
+        };
+        if !can_mutate_profile(&auth_state, &account) {
+            return;
+        }
+        dialogs::auth::show_auth_dialog(Rc::clone(&auth_state), account);
     });
 }
 

@@ -117,6 +117,7 @@ pub(in crate::app) fn refresh_content(state: &AppState) {
         state.sync_button.set_sensitive(false);
         state.preview_button.set_sensitive(false);
         state.preview_button.set_visible(true);
+        state.auth_button.set_visible(false);
         state.edit_button.set_sensitive(false);
         state.transfers.clear();
         return;
@@ -167,7 +168,9 @@ pub(in crate::app) fn refresh_content(state: &AppState) {
         control_action_icon(controls.preview.action),
         control_action_label(controls.preview.action),
     );
-    state.edit_button.set_sensitive(true);
+    let is_unauth = !matches!(account.status, AccountStatus::Authenticated);
+    state.auth_button.set_visible(is_unauth);
+    state.mode_dropdown.set_visible(!is_unauth);
 }
 
 pub(in crate::app) fn show_toast(state: &AppState, message: &str) {

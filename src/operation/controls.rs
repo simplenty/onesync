@@ -44,8 +44,13 @@ pub struct ControlButtons {
 
 #[must_use]
 pub fn controls_for(input: ControlInput) -> ControlButtons {
-    let can_start =
-        input.authenticated && input.client_ready && matches!(input.runtime, CommandRuntime::Idle);
+    if !input.authenticated {
+        return ControlButtons {
+            sync: CommandButtonModel { visible: false, sensitive: false, action: ControlAction::StartManualSync },
+            preview: CommandButtonModel { visible: false, sensitive: false, action: ControlAction::StartPreview },
+        };
+    }
+    let can_start = input.authenticated && input.client_ready && matches!(input.runtime, CommandRuntime::Idle);
     match input.mode {
         SyncMode::Automatic => automatic_controls(input.runtime, can_start),
         SyncMode::Manual => manual_controls(input.runtime, can_start),
