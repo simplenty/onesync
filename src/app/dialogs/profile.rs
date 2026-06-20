@@ -19,7 +19,8 @@ use crate::profile::{
 };
 use adw::prelude::*;
 use gtk::{Align, glib};
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, fs, rc::Rc};
+use crate::utils::expand_home;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SyncDirectionChoice {
@@ -1035,7 +1036,7 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     remove_content.append(&risk_label);
 
     let guarantee_label = gtk::Label::builder()
-        .label("这不会删除 OneDrive 云端文件或本地同步目录。")
+        .label("这不会删除 OneDrive 云端文件。")
         .wrap(true)
         .halign(Align::Fill)
         .xalign(0.0)
@@ -1564,4 +1565,38 @@ fn remove_profile(state: &Rc<AppState>, account: &Account) {
     load_sync_mode_for_selected_profile(state);
     refresh_content(state);
     state.transfers.clear();
+
+    let dialog = adw::AlertDialog::new(
+        Some("移除本地同步目录?"),
+        Some(&format!(
+            "已从 OneSync 移除账户 {}。\n是否同时删除本地同步目录？",
+            account.name
+        )),
+    );
+    dialog.add_responses(&[
+        ("keep", "只移除账户"),
+        ("delete", "同时删除目录"),
+    ]);
+    dialog.set_default_response(Some("keep"));
+    dialog.set_close_response("keep");
+    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+    let dialog_state = Rc::clone(state);
+    let dialog_account = account.clone();
+    dialog.choose(
+        Some(&state.window),
+        None::<&gtk::gio::Cancellable>,
+        move |response| {
+            if response != "delete" {
+                return;
+            }
+            let sync_path = expand_home(&dialog_account.sync_dir);
+            if sync_path.exists() {
+                if let Err(error) = fs::remove_dir_all(&sync_path) {
+                    show_toast(&dialog_state, &format!("删除同步目录失败: {error}"));
+                } else {
+                    show_toast(&dialog_state, "本地同步目录已删除");
+                }
+            }
+        },
+    );
 }

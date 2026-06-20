@@ -138,7 +138,7 @@ pub(in crate::app) fn build_content_widgets() -> (adw::ToolbarView, ContentWidge
     actions.append(&mode_dropdown);
     actions.append(&sync_button);
     actions.append(&preview_button);
-    let auth_button = command_button("dialog-password-symbolic", "认证");
+    let auth_button = command_button("dialog-password-symbolic", "立即认证");
 
     actions.append(&auth_button);
     let account_menu_button = gtk::MenuButton::builder()
