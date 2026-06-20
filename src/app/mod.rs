@@ -10,7 +10,7 @@ mod widgets;
 use crate::{
     adapter::{
         graph::start_account_identity_lookup,
-        onedrive::check_client,
+        onedrive::{check_client, stop_operation},
     },
     event::{
         ClientCheck,
@@ -20,7 +20,7 @@ use crate::{
 use actions::{connect_preview_row_actions, start_or_stop_auto_sync_for_account, start_or_stop_manual_one_time_sync_for_account, start_or_stop_preview_for_account};
 use adw::prelude::*;
 use events::{
-    begin_operation, can_mutate_profile, install_backend_event_pump, stop_all_monitors,
+    begin_operation, can_mutate_profile, finish_operation, install_backend_event_pump, stop_all_monitors,
 };
 use gtk::glib;
 use layout::{build_content_widgets, build_sidebar};
@@ -216,6 +216,13 @@ fn connect_shutdown(state: Rc<AppState>) {
 }
 
 pub(in crate::app) fn close_auth_panel(state: &AppState, account_id: &str) {
+    let handle = state.operation_handles.borrow().get(account_id).cloned();
+    if let Some(handle) = handle {
+        let _ = stop_operation(&handle);
+        finish_operation(state, account_id);
+        state.operation_handles.borrow_mut().remove(account_id);
+    }
+
     let panel = {
         let should_clear = state
             .auth_panel

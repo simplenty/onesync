@@ -17,6 +17,7 @@ pub enum ProcPhase {
 /// Carries only raw (non-localized) detail strings; the app presenter converts
 /// each variant to a user-facing message.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum BackendError {
     // onedrive CLI output classification
     AuthExpired,

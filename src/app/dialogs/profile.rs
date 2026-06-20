@@ -28,6 +28,7 @@ enum SyncDirectionChoice {
     UploadOnly,
 }
 
+
 impl SyncDirectionChoice {
     fn from_edit(edit: &ConfigEdit) -> Self {
         if edit.download_only {
@@ -150,7 +151,7 @@ fn direction_choice_row(
     let row = adw::ActionRow::builder()
         .title(title)
         .subtitle(subtitle)
-        .activatable(can_mutate || !matches!(account.status, AccountStatus::Authenticated))
+        .activatable(can_mutate)
         .build();
     let check = gtk::CheckButton::builder()
         .active(active)
@@ -225,7 +226,13 @@ pub(in crate::app) fn show_add_account_dialog(state: Rc<AppState>) {
         .orientation(gtk::Orientation::Vertical)
         .build();
 
+    let cancel_button = gtk::Button::builder().label("取消").width_request(80).build();
+    let add_button = gtk::Button::builder().label("继续").css_classes(["suggested-action"]).width_request(80).build();
+
     let header = adw::HeaderBar::new();
+    header.pack_start(&cancel_button);
+    header.pack_end(&add_button);
+    header.set_show_end_title_buttons(false);
     root.append(&header);
 
     let content = gtk::Box::builder()
@@ -249,19 +256,28 @@ pub(in crate::app) fn show_add_account_dialog(state: Rc<AppState>) {
 
     content.append(&form_row("名称", &name_entry));
     content.append(&form_row("同步目录", &sync_dir_entry));
-
-    let actions = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
-        .halign(Align::End)
-        .margin_top(4)
-        .build();
-    let cancel_button = gtk::Button::with_label("取消");
-    let add_button = gtk::Button::with_label("继续认证");
-    actions.append(&cancel_button);
-    actions.append(&add_button);
-    content.append(&actions);
-
+    let name_for_check = name_entry.clone();
+    let sync_dir_for_check = sync_dir_entry.clone();
+    let add_for_check = add_button.clone();
+    let check_fields = Rc::new(move || {
+        let name_ok = !name_for_check.text().trim().is_empty();
+        let dir_ok = !sync_dir_for_check.text().trim().is_empty();
+        let valid = name_ok && dir_ok;
+        add_for_check.set_sensitive(valid);
+        if valid {
+            add_for_check.add_css_class("suggested-action");
+        } else {
+            add_for_check.remove_css_class("suggested-action");
+        }
+    });
+    {
+        let check = Rc::clone(&check_fields);
+        name_entry.connect_changed(move |_| check());
+    }
+    {
+        let check = Rc::clone(&check_fields);
+        sync_dir_entry.connect_changed(move |_| check());
+    }
     let cancel_dialog = dialog.clone();
     cancel_button.connect_clicked(move |_| {
         cancel_dialog.close();
@@ -326,8 +342,8 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     let header = adw::HeaderBar::new();
     header.set_show_start_title_buttons(false);
     header.set_show_end_title_buttons(false);
-    let close_button = gtk::Button::with_label("关闭");
-    let save_button = gtk::Button::with_label("保存");
+    let close_button = gtk::Button::builder().label("关闭").width_request(80).build();
+    let save_button = gtk::Button::builder().label("保存").width_request(80).build();
     header.pack_start(&close_button);
     header.pack_end(&save_button);
     root.append(&header);
@@ -347,8 +363,9 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
         .build();
 
     let can_mutate = can_mutate_profile(&state, &account);
-    save_button.set_sensitive(can_mutate);
 
+    save_button.set_sensitive(false);
+    let dirty = Rc::new(Cell::new(false));
     let config_path = std::path::Path::new(&account.config_dir).join("config");
     let config_result = OneDriveConfig::read(&config_path);
     let config_available = config_result.is_ok();
@@ -371,7 +388,7 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     let account_location_row = adw::ActionRow::builder()
         .title("账户信息")
         .subtitle(account_location_summary(&account, &original_config_edit))
-        .activatable(can_mutate || !matches!(account.status, AccountStatus::Authenticated))
+        .activatable(can_mutate)
         .build();
     account_location_row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
     overview_group.add(&account_location_row);
@@ -430,6 +447,7 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
 
     let refresh_header: Rc<dyn Fn()> = Rc::new({
         let save_button = save_button.clone();
+        let dirty = Rc::clone(&dirty);
         let current_page = Rc::clone(&current_page);
         let remove_mode = Rc::clone(&remove_mode);
         let close_button = close_button.clone();
@@ -444,11 +462,32 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
             } else {
                 save_button.set_label("保存");
                 save_button.remove_css_class("destructive-action");
-                save_button.add_css_class("suggested-action");
+                if dirty.get() {
+                    save_button.add_css_class("suggested-action");
+                    save_button.set_sensitive(true);
+                } else {
+                    save_button.set_sensitive(false);
+                }
             }
         }
     });
 
+    let mark_dirty: Rc<dyn Fn()> = Rc::new({
+        let dirty = Rc::clone(&dirty);
+        let save_button = save_button.clone();
+        move || {
+            if !dirty.get() {
+                dirty.set(true);
+                save_button.set_sensitive(true);
+                if dirty.get() {
+                    save_button.add_css_class("suggested-action");
+                    save_button.set_sensitive(true);
+                } else {
+                    save_button.set_sensitive(false);
+                }
+            }
+        }
+    });
 
     let account_location_page = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -896,7 +935,6 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     });
 
     let monitor_scrolled = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
         .vexpand(true)
         .build();
     let monitor_clamp = adw::Clamp::builder()
@@ -906,6 +944,46 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
         .build();
     monitor_scrolled.set_child(Some(&monitor_clamp));
     stack.add_named(&monitor_scrolled, Some("monitor"));
+    {
+        let md = Rc::clone(&mark_dirty);
+        name_row.connect_changed(move |_| md());
+    }
+    {
+        let md = Rc::clone(&mark_dirty);
+        all_check.connect_toggled(move |_| md());
+    }
+    {
+        let md = Rc::clone(&mark_dirty);
+        exclude_check.connect_toggled(move |_| md());
+    }
+    {
+        let md = Rc::clone(&mark_dirty);
+        include_check.connect_toggled(move |_| md());
+    }
+    {
+        let md = Rc::clone(&mark_dirty);
+        bidirectional_check.connect_toggled(move |_| md());
+    }
+    {
+        let md = Rc::clone(&mark_dirty);
+        download_check.connect_toggled(move |_| md());
+    }
+    {
+        let md = Rc::clone(&mark_dirty);
+        upload_check.connect_toggled(move |_| md());
+    }
+    {
+        let md = Rc::clone(&mark_dirty);
+        no_remote_delete_switch.connect_activate(move |_| md());
+    }
+    {
+        let md = Rc::clone(&mark_dirty);
+        monitor_interval_row.adjustment().connect_value_changed(move |_| md());
+    }
+    {
+        let md = Rc::clone(&mark_dirty);
+        monitor_fullscan_row.adjustment().connect_value_changed(move |_| md());
+    }
 
     let cp_for_monitor = Rc::clone(&current_page);
     let refresh_for_monitor = Rc::clone(&refresh_header);

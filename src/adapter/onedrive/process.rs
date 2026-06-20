@@ -64,71 +64,112 @@ pub fn check_client(binary: String, sender: mpsc::Sender<BackendEvent>) {
     });
 }
 
-pub fn start_authentication(account: Account, binary: String, sender: mpsc::Sender<BackendEvent>) {
-    thread::spawn(move || {
-        let auth_url = auth_url_path(&account);
-        let auth_response = auth_response_path(&account);
-        let _ = fs::remove_file(&auth_url);
-        let _ = fs::remove_file(&auth_response);
+pub fn start_authentication(
+    account: Account,
+    binary: String,
+    sender: mpsc::Sender<BackendEvent>,
+) -> io::Result<SyncHandle> {
+    let auth_url = auth_url_path(&account);
+    let auth_response = auth_response_path(&account);
+    let _ = fs::remove_file(&auth_url);
+    let _ = fs::remove_file(&auth_response);
 
-        let child = match Command::new(&binary)
-            .arg("--confdir")
-            .arg(&account.config_dir)
-            .arg("--auth-files")
-            .arg(format!(
-                "{}:{}",
-                auth_url.display(),
-                auth_response.display()
-            ))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(error) => {
+    let child = Command::new(&binary)
+        .arg("--confdir")
+        .arg(&account.config_dir)
+        .arg("--auth-files")
+        .arg(format!(
+            "{}:{}",
+            auth_url.display(),
+            auth_response.display()
+        ))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let child = Arc::new(Mutex::new(child));
+    let stop_requested = Arc::new(AtomicBool::new(false));
+    let wait_child = Arc::clone(&child);
+    let wait_stop_requested = Arc::clone(&stop_requested);
+
+    thread::spawn(move || {
+        for _ in 0..300 {
+            if wait_stop_requested.load(Ordering::SeqCst) {
+                let mut child = wait_child.lock().ok();
+                if let Some(ref mut child) = child {
+                    let _ = child.kill();
+                }
                 let _ = sender.send(BackendEvent::AuthFinished {
-                    account_id: account.id,
+                    account_id: account.id.clone(),
                     success: false,
-                    error: Some(BackendError::SpawnFailed(error.to_string())),
+                    error: Some(BackendError::WaitFailed(
+                        ProcPhase::Auth,
+                        "requested stop".to_string(),
+                    )),
                 });
                 return;
             }
-        };
-
-        for _ in 0..300 {
-            if let Ok(url) = fs::read_to_string(&auth_url) {
-                let trimmed = url.trim();
-                if !trimmed.is_empty() {
-                    let _ = sender.send(BackendEvent::AuthUrl {
-                        account_id: account.id.clone(),
-                        url: trimmed.to_string(),
-                    });
-                    break;
+            match fs::read_to_string(&auth_url) {
+                Ok(url) => {
+                    let trimmed = url.trim();
+                    if !trimmed.is_empty() {
+                        let _ = sender.send(BackendEvent::AuthUrl {
+                            account_id: account.id.clone(),
+                            url: trimmed.to_string(),
+                        });
+                        break;
+                    }
                 }
+                Err(_) => {}
             }
             thread::sleep(Duration::from_millis(200));
         }
 
-        match child.wait_with_output() {
-            Ok(output) => {
-                let combined = combined_output(&output.stdout, &output.stderr);
-                let success = output.status.success() || is_authenticated(&account);
-                let error = (!success).then(|| classify_onedrive_error(&combined));
+        loop {
+            if wait_stop_requested.load(Ordering::SeqCst) {
+                let mut child = wait_child.lock().ok();
+                if let Some(ref mut child) = child {
+                    let _ = child.kill();
+                }
                 let _ = sender.send(BackendEvent::AuthFinished {
-                    account_id: account.id,
-                    success,
-                    error,
-                });
-            }
-            Err(error) => {
-                let _ = sender.send(BackendEvent::AuthFinished {
-                    account_id: account.id,
+                    account_id: account.id.clone(),
                     success: false,
-                    error: Some(BackendError::WaitFailed(ProcPhase::Auth, error.to_string())),
+                    error: Some(BackendError::WaitFailed(
+                        ProcPhase::Auth,
+                        "requested stop".to_string(),
+                    )),
                 });
+                return;
+            }
+            let result = wait_child.lock().ok().and_then(|mut child| child.try_wait().ok());
+            match result {
+                Some(Some(status)) => {
+                    let success = status.success() || is_authenticated(&account);
+                    let error = (!success).then(|| classify_onedrive_error(""));
+                    let _ = sender.send(BackendEvent::AuthFinished {
+                        account_id: account.id,
+                        success,
+                        error,
+                    });
+                    return;
+                }
+                None => {
+                    let _ = sender.send(BackendEvent::AuthFinished {
+                        account_id: account.id,
+                        success: false,
+                        error: Some(BackendError::MonitorInaccessible),
+                    });
+                    return;
+                }
+                Some(None) => thread::sleep(Duration::from_millis(500)),
             }
         }
     });
+
+    Ok(SyncHandle {
+        child,
+        stop_requested,
+    })
 }
 
 pub fn start_sync(

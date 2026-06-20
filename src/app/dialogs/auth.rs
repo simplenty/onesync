@@ -1,5 +1,5 @@
 use super::super::{
-    begin_operation, close_auth_panel, onedrive_command,
+    begin_operation, close_auth_panel, finish_operation, onedrive_command,
     render::show_toast,
     state::{AppState, AuthPanel},
     widgets::form_row,
@@ -35,9 +35,12 @@ pub(in crate::app) fn show_auth_dialog(state: Rc<AppState>, account: Account) {
         .build();
 
     let header = adw::HeaderBar::new();
-    let close_button = gtk::Button::with_label("关闭");
+    let close_button = gtk::Button::builder().label("关闭").width_request(80).build();
     header.pack_start(&close_button);
+    let finish_button = gtk::Button::builder().label("认证").sensitive(false).width_request(80).build();
+    header.pack_end(&finish_button);
     root.append(&header);
+    header.set_show_end_title_buttons(false);
 
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -88,15 +91,17 @@ pub(in crate::app) fn show_auth_dialog(state: Rc<AppState>, account: Account) {
         .placeholder_text("粘贴浏览器最终跳转到的完整 redirect URI")
         .build();
     content.append(&form_row("回调 URI", &auth_response_entry));
+    let button_for_uri = finish_button.clone();
+    auth_response_entry.connect_changed(move |entry| {
+        let has_text = !entry.text().trim().is_empty();
+        button_for_uri.set_sensitive(has_text);
+        if has_text {
+            button_for_uri.add_css_class("suggested-action");
+        } else {
+            button_for_uri.remove_css_class("suggested-action");
+        }
+    });
 
-    let actions = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
-        .halign(Align::End)
-        .build();
-    let finish_button = gtk::Button::with_label("提交回调");
-    actions.append(&finish_button);
-    content.append(&actions);
 
     let close_blocked = copy_close_blocked;
     let panel = AuthPanel {
@@ -149,6 +154,7 @@ pub(in crate::app) fn show_auth_dialog(state: Rc<AppState>, account: Account) {
                 finish_close_button.set_sensitive(false);
                 finish_copy_button.set_sensitive(false);
                 finish_button_for_click.set_sensitive(false);
+                finish_button_for_click.remove_css_class("suggested-action");
                 finish_auth_response_entry.set_editable(false);
                 show_toast(&finish_state, "已提交认证回调");
             }
@@ -210,22 +216,37 @@ fn start_authentication_flow(
     auth_url_entry.set_text("");
     auth_response_entry.set_text("");
     status_label.set_label("正在生成认证链接");
-    start_authentication(
+    match start_authentication(
         account.clone(),
         onedrive_command(&state),
         state.sender.clone(),
-    );
+    ) {
+        Ok(handle) => {
+            state
+                .operation_handles
+                .borrow_mut()
+                .insert(account.id.clone(), handle);
+        }
+        Err(error) => {
+            finish_operation(&state, &account.id);
+            show_toast(&state, &format!("启动认证失败: {error}"));
+        }
+    }
 }
 
 fn form_widget_row(label: &str, widget: &impl IsA<gtk::Widget>) -> gtk::Box {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(12)
+        .margin_top(4)
+        .margin_bottom(4)
+        .margin_start(14)
+        .margin_end(14)
         .build();
     let title = gtk::Label::builder()
         .label(label)
         .halign(Align::Start)
-        .width_request(90)
+        .width_request(110)
         .build();
     row.append(&title);
     row.append(widget);

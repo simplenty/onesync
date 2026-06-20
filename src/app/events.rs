@@ -63,6 +63,7 @@ fn drain_backend_events(state: &Rc<AppState>) {
                 success,
                 error,
             } => {
+                state.operation_handles.borrow_mut().remove(&account_id);
                 finish_operation(state, &account_id);
                 let status = if success {
                     AccountStatus::Authenticated
