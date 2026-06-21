@@ -1,4 +1,4 @@
-use gtk::{prelude::*, Align};
+use gtk::{Align, prelude::*};
 
 pub(in crate::app) fn form_row(label: &str, entry: &gtk::Entry) -> gtk::Box {
     let row = gtk::Box::builder()

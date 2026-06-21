@@ -101,11 +101,11 @@ fn finish_graph_apply_with_reconcile(
             });
 
     let success = reconcile.is_ok();
-   let error = reconcile
-       .as_ref()
-       .err()
+    let error = reconcile
+        .as_ref()
+        .err()
         .map(|e| BackendError::ReconcileFailed(e.to_string()));
-   let _ = sender.send(BackendEvent::PreviewReconcileFinished {
+    let _ = sender.send(BackendEvent::PreviewReconcileFinished {
         account_id: account.id.clone(),
         change_id: change.id.clone(),
         success,

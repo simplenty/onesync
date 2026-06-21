@@ -84,7 +84,9 @@ pub fn create_account(
         sync_dir: sync_dir.to_string(),
         ..ConfigEdit::default()
     });
-    config.write_with_backup(config_dir.join("config")).expect("failed to write profile config");
+    config
+        .write_with_backup(config_dir.join("config"))
+        .expect("failed to write profile config");
     fs::create_dir_all(expand_home(sync_dir)).expect("failed to create sync directory");
 
     Ok(Account {
@@ -129,7 +131,11 @@ pub fn suggested_sync_dir() -> String {
     }
 }
 
-fn validate_unique(existing: &[Account], name: &str, sync_dir: &str) -> Result<(), AccountStoreError> {
+fn validate_unique(
+    existing: &[Account],
+    name: &str,
+    sync_dir: &str,
+) -> Result<(), AccountStoreError> {
     if existing.iter().any(|account| account.name == name) {
         return Err(AccountStoreError::DuplicateAccountName);
     }

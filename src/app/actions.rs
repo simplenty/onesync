@@ -37,7 +37,9 @@ pub(in crate::app) fn load_sync_mode_for_selected_profile(state: &AppState) {
         .unwrap_or(SyncMode::Manual);
     state.selected_sync_mode.set(mode);
     state.updating_sync_mode_dropdown.set(true);
-    state.mode_dropdown.set_selected(dropdown_index_from_sync_mode(mode));
+    state
+        .mode_dropdown
+        .set_selected(dropdown_index_from_sync_mode(mode));
     state.updating_sync_mode_dropdown.set(false);
 }
 

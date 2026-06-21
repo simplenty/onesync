@@ -1,11 +1,14 @@
 #![allow(unused_imports)]
-pub mod payload;
 mod backend;
 mod error;
 mod outcome;
+pub mod payload;
 
-pub use backend::{BackendEvent, ClientCheck, ConfirmationKind};
 pub(crate) use backend::Version;
+pub use backend::{BackendEvent, ClientCheck, ConfirmationKind};
 pub use error::{BackendError, ProcPhase};
 pub use outcome::OperationOutcome;
-pub use payload::{ChangeDirection, ChangeKind, FileChange, PreviewAction, PreviewChange, PreviewIntent, PreviewState};
+pub use payload::{
+    ChangeDirection, ChangeKind, FileChange, PreviewAction, PreviewChange, PreviewIntent,
+    PreviewState,
+};

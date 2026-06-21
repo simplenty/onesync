@@ -1,8 +1,7 @@
 use super::super::{
     account_label,
     actions::load_sync_mode_for_selected_profile,
-    can_mutate_profile,
-    backend_error_message,
+    backend_error_message, can_mutate_profile,
     dialogs::auth::show_auth_dialog,
     dialogs::confirm,
     render::{rebuild_profile_list, refresh_content, show_toast},
@@ -17,10 +16,10 @@ use crate::profile::{
     remove_confirmation_matches, save_accounts, suggested_account_name, suggested_sync_dir,
     write_sync_list,
 };
+use crate::utils::expand_home;
 use adw::prelude::*;
 use gtk::{Align, glib};
 use std::{cell::Cell, fs, rc::Rc};
-use crate::utils::expand_home;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SyncDirectionChoice {
@@ -28,7 +27,6 @@ enum SyncDirectionChoice {
     DownloadOnly,
     UploadOnly,
 }
-
 
 impl SyncDirectionChoice {
     fn from_edit(edit: &ConfigEdit) -> Self {
@@ -48,8 +46,6 @@ enum ScopeChoice {
     Exclude,
     Include,
 }
-
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EditPage {
@@ -76,7 +72,6 @@ impl EditPage {
         !matches!(self, Self::Overview)
     }
 }
-
 
 fn direction_title(choice: SyncDirectionChoice, no_remote_delete: bool) -> String {
     match choice {
@@ -213,7 +208,6 @@ fn selected_scope_from_checks(
     }
 }
 
-
 pub(in crate::app) fn show_add_account_dialog(state: Rc<AppState>) {
     let dialog = adw::Window::builder()
         .title("添加账号")
@@ -227,8 +221,15 @@ pub(in crate::app) fn show_add_account_dialog(state: Rc<AppState>) {
         .orientation(gtk::Orientation::Vertical)
         .build();
 
-    let cancel_button = gtk::Button::builder().label("取消").width_request(80).build();
-    let add_button = gtk::Button::builder().label("继续").css_classes(["suggested-action"]).width_request(80).build();
+    let cancel_button = gtk::Button::builder()
+        .label("取消")
+        .width_request(80)
+        .build();
+    let add_button = gtk::Button::builder()
+        .label("继续")
+        .css_classes(["suggested-action"])
+        .width_request(80)
+        .build();
 
     let header = adw::HeaderBar::new();
     header.pack_start(&cancel_button);
@@ -343,8 +344,14 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     let header = adw::HeaderBar::new();
     header.set_show_start_title_buttons(false);
     header.set_show_end_title_buttons(false);
-    let close_button = gtk::Button::builder().label("关闭").width_request(80).build();
-    let save_button = gtk::Button::builder().label("保存").width_request(80).build();
+    let close_button = gtk::Button::builder()
+        .label("关闭")
+        .width_request(80)
+        .build();
+    let save_button = gtk::Button::builder()
+        .label("保存")
+        .width_request(80)
+        .build();
     header.pack_start(&close_button);
     header.pack_end(&save_button);
     root.append(&header);
@@ -455,7 +462,11 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
         move || {
             let page = current_page.get();
             let in_remove = remove_mode.get();
-            close_button.set_label(if page.is_sub_page() { "返回" } else { "关闭" });
+            close_button.set_label(if page.is_sub_page() {
+                "返回"
+            } else {
+                "关闭"
+            });
             if in_remove {
                 save_button.set_label("移除账户");
                 save_button.remove_css_class("suggested-action");
@@ -912,17 +923,21 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
 
     let monitor_default_for_interval = Rc::clone(&monitor_uses_default);
     let monitor_label_for_interval = monitor_default_label.clone();
-    monitor_interval_row.adjustment().connect_value_changed(move |_| {
-        monitor_default_for_interval.set(false);
-        monitor_label_for_interval.set_label("当前使用自定义检查设置");
-    });
+    monitor_interval_row
+        .adjustment()
+        .connect_value_changed(move |_| {
+            monitor_default_for_interval.set(false);
+            monitor_label_for_interval.set_label("当前使用自定义检查设置");
+        });
 
     let monitor_default_for_fullscan = Rc::clone(&monitor_uses_default);
     let monitor_label_for_fullscan = monitor_default_label.clone();
-    monitor_fullscan_row.adjustment().connect_value_changed(move |_| {
-        monitor_default_for_fullscan.set(false);
-        monitor_label_for_fullscan.set_label("当前使用自定义检查设置");
-    });
+    monitor_fullscan_row
+        .adjustment()
+        .connect_value_changed(move |_| {
+            monitor_default_for_fullscan.set(false);
+            monitor_label_for_fullscan.set_label("当前使用自定义检查设置");
+        });
 
     let monitor_default_for_reset = Rc::clone(&monitor_uses_default);
     let monitor_interval_for_reset = monitor_interval_row.clone();
@@ -935,9 +950,7 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
         monitor_label_for_reset.set_label("当前使用 onedrive 默认检查设置");
     });
 
-    let monitor_scrolled = gtk::ScrolledWindow::builder()
-        .vexpand(true)
-        .build();
+    let monitor_scrolled = gtk::ScrolledWindow::builder().vexpand(true).build();
     let monitor_clamp = adw::Clamp::builder()
         .maximum_size(640)
         .tightening_threshold(560)
@@ -979,11 +992,15 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     }
     {
         let md = Rc::clone(&mark_dirty);
-        monitor_interval_row.adjustment().connect_value_changed(move |_| md());
+        monitor_interval_row
+            .adjustment()
+            .connect_value_changed(move |_| md());
     }
     {
         let md = Rc::clone(&mark_dirty);
-        monitor_fullscan_row.adjustment().connect_value_changed(move |_| md());
+        monitor_fullscan_row
+            .adjustment()
+            .connect_value_changed(move |_| md());
     }
 
     let cp_for_monitor = Rc::clone(&current_page);
@@ -1079,7 +1096,11 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
     let close_remove = Rc::clone(&remove_mode);
     let close_refresh = Rc::clone(&refresh_header);
     close_button.connect_clicked(move |_| {
-        let name = close_stack.visible_child_name().as_deref().unwrap_or("").to_string();
+        let name = close_stack
+            .visible_child_name()
+            .as_deref()
+            .unwrap_or("")
+            .to_string();
         let page = EditPage::from_stack_name(&name);
         if close_remove.get() {
             close_remove.set(false);
@@ -1135,7 +1156,9 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
             match collect_config_edit(
                 &original_config_edit,
                 &sync_dir_row,
-                &all_check, &exclude_check, &include_check,
+                &all_check,
+                &exclude_check,
+                &include_check,
                 &skip_file_list,
                 &skip_dir_list,
                 &sync_list_list,
@@ -1573,10 +1596,7 @@ fn remove_profile(state: &Rc<AppState>, account: &Account) {
             account.name
         )),
     );
-    dialog.add_responses(&[
-        ("keep", "只移除账户"),
-        ("delete", "同时删除目录"),
-    ]);
+    dialog.add_responses(&[("keep", "只移除账户"), ("delete", "同时删除目录")]);
     dialog.set_default_response(Some("keep"));
     dialog.set_close_response("keep");
     dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);

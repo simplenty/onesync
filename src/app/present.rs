@@ -1,8 +1,8 @@
 use crate::event::{
-    payload::{ChangeKind, FileChange, PreviewAction, PreviewChange, PreviewIntent},
     BackendError, ClientCheck, ConfirmationKind, ProcPhase,
+    payload::{ChangeKind, FileChange, PreviewAction, PreviewChange, PreviewIntent},
 };
-use crate::operation::{controls::ControlAction, AccountOperation, OperationKind, OperationPhase};
+use crate::operation::{AccountOperation, OperationKind, OperationPhase, controls::ControlAction};
 use crate::profile::{Account, AccountStatus};
 
 pub(in crate::app) fn backend_error_message(error: &BackendError) -> String {
@@ -28,9 +28,9 @@ pub(in crate::app) fn backend_error_message(error: &BackendError) -> String {
         }
         BackendError::MonitorInaccessible => "无法访问持续同步进程".to_string(),
         BackendError::MonitorPollFailed(detail) => format!("轮询持续同步进程失败: {detail}"),
-       BackendError::ApplyFailed(detail) => format!("应用失败：{detail}"),
+        BackendError::ApplyFailed(detail) => format!("应用失败：{detail}"),
         BackendError::ReconcileFailed(detail) => format!("同步状态更新失败：{detail}"),
-       BackendError::IdentityLookupFailed(detail) => {
+        BackendError::IdentityLookupFailed(detail) => {
             format!("无法读取 Microsoft 账号信息: {detail}")
         }
         BackendError::DuplicateAccountName => "账户名称已存在".to_string(),
@@ -102,12 +102,8 @@ pub(in crate::app) fn preview_intent_label(intent: PreviewIntent) -> &'static st
 
 pub(in crate::app) fn preview_intent_detail(intent: PreviewIntent) -> &'static str {
     match intent {
-        PreviewIntent::LocalChangeToRemote => {
-            "本地内容会同步到 OneDrive，完成后会更新同步状态。"
-        }
-        PreviewIntent::RemoteChangeToLocal => {
-            "OneDrive 内容会下载到本地，完成后会更新同步状态。"
-        }
+        PreviewIntent::LocalChangeToRemote => "本地内容会同步到 OneDrive，完成后会更新同步状态。",
+        PreviewIntent::RemoteChangeToLocal => "OneDrive 内容会下载到本地，完成后会更新同步状态。",
         PreviewIntent::LocalDeleteToRemote => {
             "本地已删除的项目也会从 OneDrive 删除，完成后会更新同步状态。"
         }
@@ -255,7 +251,10 @@ mod tests {
             "last line"
         );
         assert_eq!(
-            backend_error_message(&BackendError::WaitFailed(ProcPhase::Preview, "boom".to_string())),
+            backend_error_message(&BackendError::WaitFailed(
+                ProcPhase::Preview,
+                "boom".to_string()
+            )),
             "等待预览进程失败: boom"
         );
         assert_eq!(

@@ -25,12 +25,18 @@ pub struct AccountOperation {
 impl AccountOperation {
     #[must_use]
     pub fn running(kind: OperationKind) -> Self {
-        Self { kind, phase: OperationPhase::Running }
+        Self {
+            kind,
+            phase: OperationPhase::Running,
+        }
     }
 
     #[must_use]
     pub fn stopping(kind: OperationKind) -> Self {
-        Self { kind, phase: OperationPhase::Stopping }
+        Self {
+            kind,
+            phase: OperationPhase::Stopping,
+        }
     }
 
     #[must_use]

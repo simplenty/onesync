@@ -1,5 +1,5 @@
-use crate::event::payload::{FileChange, PreviewChange};
 use crate::event::error::{BackendError, ProcPhase};
+use crate::event::payload::{FileChange, PreviewChange};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Version {
@@ -110,5 +110,4 @@ pub enum ConfirmationKind {
     UploadOnlyNoRemoteDelete,
 }
 
-impl ConfirmationKind {
-}
+impl ConfirmationKind {}

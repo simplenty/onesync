@@ -1,7 +1,7 @@
+use super::preview::response_to_io;
 use crate::event::{BackendError, BackendEvent};
 use crate::profile::Account;
 use serde::Deserialize;
-use super::preview::response_to_io;
 use std::{fs, io, path::Path, sync::mpsc, thread, time::Duration};
 
 const DEFAULT_APPLICATION_ID: &str = "d50ca740-c83f-4d1b-b616-12c519384f0c";
@@ -63,13 +63,13 @@ fn fetch_account_identity(account: &Account) -> io::Result<AccountIdentity> {
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(io::Error::other)?;
-    let response = response_to_io(client
-        .get("https://graph.microsoft.com/v1.0/me/drive?$select=owner")
-        .bearer_auth(access_token)
-        .send())?;
-    let drive = response
-        .json::<DriveResponse>()
-        .map_err(io::Error::other)?;
+    let response = response_to_io(
+        client
+            .get("https://graph.microsoft.com/v1.0/me/drive?$select=owner")
+            .bearer_auth(access_token)
+            .send(),
+    )?;
+    let drive = response.json::<DriveResponse>().map_err(io::Error::other)?;
 
     let user = drive.owner.and_then(|owner| owner.user);
     Ok(AccountIdentity {
@@ -97,16 +97,18 @@ pub(crate) fn graph_access_token(account: &Account) -> io::Result<String> {
         .build()
         .map_err(io::Error::other)?;
 
-    let token_response = response_to_io(client
-        .post("https://login.microsoftonline.com/common/oauth2/v2.0/token")
-        .form(&[
-            ("client_id", application_id.as_str()),
-            ("redirect_uri", NATIVE_CLIENT_REDIRECT_URI),
-            ("grant_type", "refresh_token"),
-            ("refresh_token", refresh_token),
-            ("scope", GRAPH_TOKEN_SCOPE),
-        ])
-        .send())?;
+    let token_response = response_to_io(
+        client
+            .post("https://login.microsoftonline.com/common/oauth2/v2.0/token")
+            .form(&[
+                ("client_id", application_id.as_str()),
+                ("redirect_uri", NATIVE_CLIENT_REDIRECT_URI),
+                ("grant_type", "refresh_token"),
+                ("refresh_token", refresh_token),
+                ("scope", GRAPH_TOKEN_SCOPE),
+            ])
+            .send(),
+    )?;
     token_response
         .json::<TokenResponse>()
         .map_err(io::Error::other)

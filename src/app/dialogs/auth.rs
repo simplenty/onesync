@@ -35,9 +35,16 @@ pub(in crate::app) fn show_auth_dialog(state: Rc<AppState>, account: Account) {
         .build();
 
     let header = adw::HeaderBar::new();
-    let close_button = gtk::Button::builder().label("关闭").width_request(80).build();
+    let close_button = gtk::Button::builder()
+        .label("关闭")
+        .width_request(80)
+        .build();
     header.pack_start(&close_button);
-    let finish_button = gtk::Button::builder().label("认证").sensitive(false).width_request(80).build();
+    let finish_button = gtk::Button::builder()
+        .label("认证")
+        .sensitive(false)
+        .width_request(80)
+        .build();
     header.pack_end(&finish_button);
     root.append(&header);
     header.set_show_end_title_buttons(false);
@@ -101,7 +108,6 @@ pub(in crate::app) fn show_auth_dialog(state: Rc<AppState>, account: Account) {
             button_for_uri.remove_css_class("suggested-action");
         }
     });
-
 
     let close_blocked = copy_close_blocked;
     let panel = AuthPanel {

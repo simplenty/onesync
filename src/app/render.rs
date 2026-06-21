@@ -1,17 +1,19 @@
 use super::{
-    control_action_icon, control_action_label,
     account_label,
+    actions::load_sync_mode_for_selected_profile,
+    actions::{
+        open_sync_dir_for_account, start_monitor_for_account, start_one_time_sync_for_account,
+    },
+    control_action_icon, control_action_label,
     events::operation,
     layout::{ACCOUNT_CONTEXT_MENU_WIDTH, build_profile_context_popover},
-    actions::{open_sync_dir_for_account, start_monitor_for_account, start_one_time_sync_for_account},
-    actions::load_sync_mode_for_selected_profile,
     state::AppState,
     status_detail, status_label, status_title,
     widgets::set_command_button_content,
 };
-use crate::profile::{Account, AccountStatus};
-use crate::operation::{OperationKind, OperationPhase};
 use crate::operation::{CommandRuntime, ControlInput, controls_for};
+use crate::operation::{OperationKind, OperationPhase};
+use crate::profile::{Account, AccountStatus};
 use adw::prelude::*;
 use std::rc::Rc;
 
@@ -141,7 +143,12 @@ pub(in crate::app) fn refresh_content(state: &AppState) {
             (OperationKind::Preview, OperationPhase::Stopping) => CommandRuntime::StoppingPreview,
             (OperationKind::Monitor, OperationPhase::Running) => CommandRuntime::RunningMonitor,
             (OperationKind::Monitor, OperationPhase::Stopping) => CommandRuntime::StoppingMonitor,
-            (OperationKind::Authentication | OperationKind::ApplyPreviewChange | OperationKind::Reconcile, _) => CommandRuntime::Blocked,
+            (
+                OperationKind::Authentication
+                | OperationKind::ApplyPreviewChange
+                | OperationKind::Reconcile,
+                _,
+            ) => CommandRuntime::Blocked,
         },
         None => CommandRuntime::Idle,
     };

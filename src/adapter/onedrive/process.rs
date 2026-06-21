@@ -2,7 +2,8 @@ use super::parse::{parse_file_change_line, parse_preview_change_line};
 use super::{
     command::{OneDriveCommandKind, add_single_directory_scope, build_command},
     output::{
-        combined_output, is_auth_required, parse_confirmation, classify_onedrive_error, parse_version,
+        classify_onedrive_error, combined_output, is_auth_required, parse_confirmation,
+        parse_version,
     },
 };
 use crate::{
@@ -55,7 +56,9 @@ pub fn check_client(binary: String, sender: mpsc::Sender<BackendEvent>) {
                         found: version,
                         minimum: MIN_ONEDRIVE_VERSION,
                     },
-                    None => ClientCheck::Missing("unable to determine onedrive version".to_string()),
+                    None => {
+                        ClientCheck::Missing("unable to determine onedrive version".to_string())
+                    }
                 }
             }
             Err(error) => ClientCheck::Missing(format!("{binary}: {error}")),
@@ -141,7 +144,10 @@ pub fn start_authentication(
                 });
                 return;
             }
-            let result = wait_child.lock().ok().and_then(|mut child| child.try_wait().ok());
+            let result = wait_child
+                .lock()
+                .ok()
+                .and_then(|mut child| child.try_wait().ok());
             match result {
                 Some(Some(status)) => {
                     let success = status.success() || is_authenticated(&account);
@@ -228,7 +234,8 @@ pub fn start_preview(
                     success,
                     requested_stop,
                     auth_required: !success && is_auth_required(&combined),
-                    error: (!success && !requested_stop).then(|| classify_onedrive_error(&combined)),
+                    error: (!success && !requested_stop)
+                        .then(|| classify_onedrive_error(&combined)),
                     requires_confirmation: parse_confirmation(&combined),
                 });
             }
@@ -238,7 +245,10 @@ pub fn start_preview(
                     success: false,
                     requested_stop,
                     auth_required: false,
-                    error: Some(BackendError::WaitFailed(ProcPhase::Preview, error.to_string())),
+                    error: Some(BackendError::WaitFailed(
+                        ProcPhase::Preview,
+                        error.to_string(),
+                    )),
                     requires_confirmation: None,
                 });
             }
@@ -291,7 +301,8 @@ fn start_sync_with_options(
                     success,
                     requested_stop,
                     auth_required,
-                    error: (!success && !requested_stop).then(|| classify_onedrive_error(&combined)),
+                    error: (!success && !requested_stop)
+                        .then(|| classify_onedrive_error(&combined)),
                     requires_confirmation: parse_confirmation(&combined),
                 });
             }

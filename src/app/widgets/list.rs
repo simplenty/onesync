@@ -1,8 +1,8 @@
-use crate::event::payload::{PreviewChange, PreviewState, FileChange};
 use crate::app::{
-    change_kind_icon, file_display_state, preview_change_icon,
-    preview_intent_label, preview_intent_detail, preview_change_description,
+    change_kind_icon, file_display_state, preview_change_description, preview_change_icon,
+    preview_intent_detail, preview_intent_label,
 };
+use crate::event::payload::{FileChange, PreviewChange, PreviewState};
 use gtk::{Align, prelude::*};
 use std::{
     cell::{Cell, RefCell},
@@ -110,7 +110,8 @@ impl TransferList {
     pub(in crate::app) fn upsert_preview(&self, account_id: String, change: PreviewChange) {
         let key = preview_row_key(&account_id, &change.id);
         if let Some(ListRow::Preview(row)) = self.rows.borrow().get(&key).cloned() {
-            row.state_label.set_label(preview_change_description(&change));
+            row.state_label
+                .set_label(preview_change_description(&change));
             row.state.set(change.state);
             self.reorder();
             return;
@@ -152,7 +153,12 @@ impl TransferList {
         }
     }
 
-    pub(in crate::app) fn mark_preview_progress(&self, account_id: &str, change_id: &str, progress: f64) {
+    pub(in crate::app) fn mark_preview_progress(
+        &self,
+        account_id: &str,
+        change_id: &str,
+        progress: f64,
+    ) {
         let key = preview_row_key(account_id, change_id);
         if let Some(ListRow::Preview(row)) = self.rows.borrow().get(&key).cloned() {
             row.state.set(PreviewState::Applying);
@@ -185,7 +191,12 @@ impl TransferList {
         }
     }
 
-    pub(in crate::app) fn mark_preview_failed(&self, account_id: &str, change_id: &str, message: &str) {
+    pub(in crate::app) fn mark_preview_failed(
+        &self,
+        account_id: &str,
+        change_id: &str,
+        message: &str,
+    ) {
         let key = preview_row_key(account_id, change_id);
         if let Some(ListRow::Preview(row)) = self.rows.borrow().get(&key).cloned() {
             if matches!(row.state.get(), PreviewState::ReconcileFailed) {

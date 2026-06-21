@@ -9,8 +9,7 @@ pub enum ChangeKind {
     Rename,
 }
 
-impl ChangeKind {
-}
+impl ChangeKind {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeDirection {
@@ -71,8 +70,7 @@ pub enum PreviewIntent {
     AmbiguousRemoteToLocal,
 }
 
-impl PreviewIntent {
-}
+impl PreviewIntent {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreviewChange {
