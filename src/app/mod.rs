@@ -41,7 +41,7 @@ use std::{
 };
 use widgets::TransferList;
 
-const APP_ID: &str = "io.github.onesync.Demo";
+const APP_ID: &str = "io.github.simplenty.onesync";
 
 pub fn run() -> glib::ExitCode {
     let app = adw::Application::builder().application_id(APP_ID).build();
@@ -58,7 +58,7 @@ fn build_ui(app: &adw::Application) {
         .default_height(720)
         .build();
     window.set_size_request(860, 560);
-
+    window.set_icon_name(Some(APP_ID));
     let (sender, receiver) = mpsc::channel();
     let configured_onedrive_command = match load_onedrive_command() {
         Ok(command) => command,
@@ -268,6 +268,7 @@ pub(in crate::app) fn close_auth_panel(state: &AppState, account_id: &str) {
         panel.window.destroy();
     }
 }
+
 
 pub(in crate::app) fn update_account_status(
     state: &Rc<AppState>,

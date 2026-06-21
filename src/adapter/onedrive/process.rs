@@ -112,18 +112,15 @@ pub fn start_authentication(
                 });
                 return;
             }
-            match fs::read_to_string(&auth_url) {
-                Ok(url) => {
-                    let trimmed = url.trim();
-                    if !trimmed.is_empty() {
-                        let _ = sender.send(BackendEvent::AuthUrl {
-                            account_id: account.id.clone(),
-                            url: trimmed.to_string(),
-                        });
-                        break;
-                    }
+            if let Ok(url) = fs::read_to_string(&auth_url) {
+                let trimmed = url.trim();
+                if !trimmed.is_empty() {
+                    let _ = sender.send(BackendEvent::AuthUrl {
+                        account_id: account.id.clone(),
+                        url: trimmed.to_string(),
+                    });
+                    break;
                 }
-                Err(_) => {}
             }
             thread::sleep(Duration::from_millis(200));
         }

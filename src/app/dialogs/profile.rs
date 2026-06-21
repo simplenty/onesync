@@ -175,7 +175,7 @@ fn monitor_spin_row(
 }
 
 fn selected_direction_from_checks(
-    bidirectional_check: &gtk::CheckButton,
+    _bidirectional_check: &gtk::CheckButton,
     download_check: &gtk::CheckButton,
     upload_check: &gtk::CheckButton,
 ) -> SyncDirectionChoice {
@@ -183,15 +183,13 @@ fn selected_direction_from_checks(
         SyncDirectionChoice::DownloadOnly
     } else if upload_check.is_active() {
         SyncDirectionChoice::UploadOnly
-    } else if bidirectional_check.is_active() {
-        SyncDirectionChoice::Bidirectional
     } else {
         SyncDirectionChoice::Bidirectional
     }
 }
 
 fn selected_scope_from_checks(
-    all_check: &gtk::CheckButton,
+    _all_check: &gtk::CheckButton,
     exclude_check: &gtk::CheckButton,
     include_check: &gtk::CheckButton,
 ) -> ScopeChoice {
@@ -199,8 +197,6 @@ fn selected_scope_from_checks(
         ScopeChoice::Exclude
     } else if include_check.is_active() {
         ScopeChoice::Include
-    } else if all_check.is_active() {
-        ScopeChoice::All
     } else {
         ScopeChoice::All
     }
@@ -373,10 +369,10 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
             sync_dir: account.sync_dir.clone(),
             ..ConfigEdit::default()
         });
-    if let Ok(sync_list) = read_sync_list(&account.config_dir) {
-        if !sync_list.trim().is_empty() {
-            original_config_edit.sync_list = sync_list;
-        }
+    if let Ok(sync_list) = read_sync_list(&account.config_dir)
+        && !sync_list.trim().is_empty()
+    {
+        original_config_edit.sync_list = sync_list;
     }
 
     let overview_group = adw::PreferencesGroup::builder().title("账户设置").build();
@@ -583,10 +579,10 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
                     Some(&dialog_for_file),
                     None::<&gtk::gio::Cancellable>,
                     move |result| {
-                        if let Ok(folder) = result {
-                            if let Some(path) = folder.path() {
-                                row_for_result.set_text(&path.to_string_lossy());
-                            }
+                        if let Ok(folder) = result
+                            && let Some(path) = folder.path()
+                        {
+                            row_for_result.set_text(&path.to_string_lossy());
                         }
                     },
                 );
@@ -1450,20 +1446,17 @@ fn collect_rule_values(list: &gtk::ListBox) -> Vec<String> {
     let mut child = list.first_child();
     while let Some(widget) = child {
         let next = widget.next_sibling();
-        if let Ok(row) = widget.downcast::<gtk::ListBoxRow>() {
-            if let Some(row_box) = row
+        if let Ok(row) = widget.downcast::<gtk::ListBoxRow>()
+            && let Some(row_box) = row
                 .child()
                 .and_then(|widget| widget.downcast::<gtk::Box>().ok())
-            {
-                if let Some(label) = row_box
-                    .first_child()
-                    .and_then(|widget| widget.downcast::<gtk::Label>().ok())
-                {
-                    let value = label.text().trim().to_string();
-                    if !value.is_empty() && !values.contains(&value) {
-                        values.push(value);
-                    }
-                }
+            && let Some(label) = row_box
+                .first_child()
+                .and_then(|widget| widget.downcast::<gtk::Label>().ok())
+        {
+            let value = label.text().trim().to_string();
+            if !value.is_empty() && !values.contains(&value) {
+                values.push(value);
             }
         }
         child = next;

@@ -1,7 +1,11 @@
 [package]
 name = "OneSync"
-version = "0.1.0"
+version = "0.0.6"
 edition = "2024"
+description = "GTK/libadwaita desktop client for managing OneDrive sync via the onedrive CLI"
+license = "MIT"
+repository = "https://github.com/simplenty/OneSync"
+authors = ["simplenty <simplenty@icloud.com>"]
 
 [dependencies]
 gtk = { package = "gtk4", version = "0.11.3", features = ["v4_18"] }
@@ -9,3 +13,44 @@ adw = { package = "libadwaita", version = "0.9.1", features = ["v1_7", "gtk_v4_1
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# ---------------------------------------------------------------------------
+# Debian package metadata (cargo deb)
+# ---------------------------------------------------------------------------
+[package.metadata.deb]
+maintainer = "simplenty <simplenty@icloud.com>"
+copyright = "2026, simplenty <simplenty@icloud.com>"
+depends = "onedrive, $auto"
+section = "net"
+priority = "optional"
+maintainer-scripts = "resources/deb"
+assets = [
+    ["target/release/OneSync", "usr/bin/onesync", "755"],
+    ["resources/OneSync.desktop", "usr/share/applications/", "644"],
+    ["resources/icons/16.png", "usr/share/icons/hicolor/16x16/apps/io.github.simplenty.onesync.png", "644"],
+    ["resources/icons/24.png", "usr/share/icons/hicolor/24x24/apps/io.github.simplenty.onesync.png", "644"],
+    ["resources/icons/32.png", "usr/share/icons/hicolor/32x32/apps/io.github.simplenty.onesync.png", "644"],
+    ["resources/icons/48.png", "usr/share/icons/hicolor/48x48/apps/io.github.simplenty.onesync.png", "644"],
+    ["resources/icons/64.png", "usr/share/icons/hicolor/64x64/apps/io.github.simplenty.onesync.png", "644"],
+    ["resources/icons/128.png", "usr/share/icons/hicolor/128x128/apps/io.github.simplenty.onesync.png", "644"],
+    ["resources/icons/256.png", "usr/share/icons/hicolor/256x256/apps/io.github.simplenty.onesync.png", "644"],
+    ["resources/icons/512.png", "usr/share/icons/hicolor/512x512/apps/io.github.simplenty.onesync.png", "644"],
+]
+
+# ---------------------------------------------------------------------------
+# RPM package metadata (cargo generate-rpm)
+# ---------------------------------------------------------------------------
+[package.metadata.generate-rpm]
+summary = "GTK desktop client for managing OneDrive sync"
+requires = { onedrive = "*", gtk4 = "*", libadwaita = "*" }
+assets = [
+    { source = "target/release/OneSync", dest = "/usr/bin/onesync", mode = "755" },
+    { source = "resources/OneSync.desktop", dest = "/usr/share/applications/", mode = "644" },
+    { source = "resources/icons/16.png", dest = "/usr/share/icons/hicolor/16x16/apps/io.github.simplenty.onesync.png", mode = "644" },
+    { source = "resources/icons/24.png", dest = "/usr/share/icons/hicolor/24x24/apps/io.github.simplenty.onesync.png", mode = "644" },
+    { source = "resources/icons/32.png", dest = "/usr/share/icons/hicolor/32x32/apps/io.github.simplenty.onesync.png", mode = "644" },
+    { source = "resources/icons/48.png", dest = "/usr/share/icons/hicolor/48x48/apps/io.github.simplenty.onesync.png", mode = "644" },
+    { source = "resources/icons/64.png", dest = "/usr/share/icons/hicolor/64x64/apps/io.github.simplenty.onesync.png", mode = "644" },
+    { source = "resources/icons/128.png", dest = "/usr/share/icons/hicolor/128x128/apps/io.github.simplenty.onesync.png", mode = "644" },
+    { source = "resources/icons/256.png", dest = "/usr/share/icons/hicolor/256x256/apps/io.github.simplenty.onesync.png", mode = "644" },
+    { source = "resources/icons/512.png", dest = "/usr/share/icons/hicolor/512x512/apps/io.github.simplenty.onesync.png", mode = "644" },
+]

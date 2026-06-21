@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=OneSync
+Comment=OneDrive sync client for Linux
+Exec=onesync
+Terminal=false
+Type=Application
+Icon=io.github.simplenty.onesync
+Categories=Network;Office;
+StartupNotify=true
+StartupWMClass=io.github.simplenty.onesync
+

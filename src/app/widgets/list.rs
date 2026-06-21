@@ -298,7 +298,7 @@ fn build_file_row(file: FileChange) -> (gtk::ListBoxRow, TransferRow) {
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .build();
     let state = gtk::Label::builder()
-        .label(&file_display_state(&file))
+        .label(file_display_state(&file))
         .halign(Align::Start)
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .css_classes(["dim-label"])

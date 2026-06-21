@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    name: Build ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    container: ubuntu:25.04
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Install system deps
+        run: |
+          apt-get update -q
+          apt-get install -y -q \
+            git curl build-essential file \
+            libgtk-4-dev libadwaita-1-dev \
+            libglib2.0-dev-bin jq
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build and package
+        run: ./resources/package.sh all
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: onesync-${{ github.ref_name }}-${{ matrix.arch }}
+          path: build/onesync-*
+
+  create-release:
+    name: Create release
+    needs: release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release and upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" 2>/dev/null || true
+          gh release delete "${{ github.ref_name }}" --yes 2>/dev/null || true
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            artifacts/onesync-*
