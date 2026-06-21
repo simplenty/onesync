@@ -245,8 +245,9 @@ fn apply_preview_change(state: Rc<AppState>, account_id: &str, change_id: &str) 
 
 fn account_by_id(state: &AppState, account_id: &str) -> Option<Account> {
     state
-        .accounts
+        .store
         .borrow()
+        .accounts()
         .iter()
         .find(|account| account.id == account_id)
         .cloned()

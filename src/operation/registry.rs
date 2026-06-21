@@ -1,13 +1,11 @@
 use super::{AccountOperation, OperationKind, OperationPhase};
 use std::collections::HashMap;
 
-#[allow(dead_code)]
 #[derive(Default)]
 pub struct OperationRegistry {
     operations: HashMap<String, AccountOperation>,
 }
 
-#[allow(dead_code)]
 impl OperationRegistry {
     #[must_use]
     pub fn get(&self, profile_id: &str) -> Option<AccountOperation> {
@@ -19,7 +17,13 @@ impl OperationRegistry {
         if self.operations.contains_key(&profile_id) {
             return false;
         }
-        self.operations.insert(profile_id, AccountOperation { kind, phase: OperationPhase::Running });
+        self.operations.insert(
+            profile_id,
+            AccountOperation {
+                kind,
+                phase: OperationPhase::Running,
+            },
+        );
         true
     }
 
@@ -36,5 +40,51 @@ impl OperationRegistry {
     #[must_use]
     pub fn contains(&self, profile_id: &str) -> bool {
         self.operations.contains_key(profile_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn begin_inserts_running_operation() {
+        let mut registry = OperationRegistry::default();
+        assert!(registry.begin("a", OperationKind::OneTimeSync));
+        let op = registry.get("a").unwrap();
+        assert_eq!(op.kind, OperationKind::OneTimeSync);
+        assert_eq!(op.phase, OperationPhase::Running);
+    }
+
+    #[test]
+    fn begin_rejects_duplicate_profile() {
+        let mut registry = OperationRegistry::default();
+        assert!(registry.begin("a", OperationKind::Monitor));
+        assert!(!registry.begin("a", OperationKind::OneTimeSync));
+    }
+
+    #[test]
+    fn mark_stopping_transitions_phase() {
+        let mut registry = OperationRegistry::default();
+        registry.begin("a", OperationKind::OneTimeSync);
+        registry.mark_stopping("a");
+        assert_eq!(registry.get("a").unwrap().phase, OperationPhase::Stopping);
+    }
+
+    #[test]
+    fn finish_removes_operation() {
+        let mut registry = OperationRegistry::default();
+        registry.begin("a", OperationKind::OneTimeSync);
+        registry.finish("a");
+        assert!(registry.get("a").is_none());
+        assert!(!registry.contains("a"));
+    }
+
+    #[test]
+    fn mark_stopping_and_finish_are_noops_for_unknown_profile() {
+        let mut registry = OperationRegistry::default();
+        registry.mark_stopping("missing");
+        registry.finish("missing");
+        assert!(registry.get("missing").is_none());
     }
 }

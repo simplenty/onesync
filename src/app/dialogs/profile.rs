@@ -1,7 +1,7 @@
 use super::super::{
     account_label,
     actions::load_sync_mode_for_selected_profile,
-    backend_error_message, can_mutate_profile,
+    can_mutate_profile,
     dialogs::auth::show_auth_dialog,
     dialogs::confirm,
     render::{rebuild_profile_list, refresh_content, show_toast},
@@ -9,12 +9,10 @@ use super::super::{
     status_label,
     widgets::form_row,
 };
-use crate::event::BackendError;
 use crate::profile::remove_profile_sync_mode;
 use crate::profile::{
-    Account, AccountStatus, ConfigEdit, OneDriveConfig, create_account, read_sync_list,
-    remove_confirmation_matches, save_accounts, suggested_account_name, suggested_sync_dir,
-    write_sync_list,
+    Account, AccountStatus, ConfigEdit, OneDriveConfig, read_sync_list,
+    remove_confirmation_matches, suggested_account_name, suggested_sync_dir, write_sync_list,
 };
 use crate::utils::expand_home;
 use adw::prelude::*;
@@ -290,23 +288,16 @@ pub(in crate::app) fn show_add_account_dialog(state: Rc<AppState>) {
     add_button.connect_clicked(move |_| {
         let name = name_entry.text().trim().to_string();
         let sync_dir = sync_dir_entry.text().trim().to_string();
-        let account_result = {
-            let accounts = dialog_state.accounts.borrow();
-            create_account(&accounts, &name, "", &sync_dir)
-        };
+        let account_result = dialog_state.store.borrow_mut().add(&name, "", &sync_dir);
         match account_result {
             Ok(account) => {
                 let auth_account = account.clone();
-                let (last_index, save_result) = {
-                    let mut accounts = dialog_state.accounts.borrow_mut();
-                    accounts.push(account);
-                    let last_index = accounts.len().saturating_sub(1);
-                    let save_result = save_accounts(&accounts);
-                    (last_index, save_result)
-                };
-                if let Err(error) = save_result {
-                    show_toast(&dialog_state, &format!("保存账号失败: {error}"));
-                }
+                let last_index = dialog_state
+                    .store
+                    .borrow()
+                    .accounts()
+                    .len()
+                    .saturating_sub(1);
                 dialog_state.selected_index.set(last_index);
                 rebuild_profile_list(&dialog_state);
                 load_sync_mode_for_selected_profile(&dialog_state);
@@ -318,10 +309,7 @@ pub(in crate::app) fn show_add_account_dialog(state: Rc<AppState>) {
             }
             Err(error) => show_toast(
                 &dialog_state,
-                &format!(
-                    "添加账号失败: {}",
-                    backend_error_message(&BackendError::from(&error))
-                ),
+                &format!("添加账号失败: {}", store_error_message(&error)),
             ),
         }
     });
@@ -1144,8 +1132,9 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
             return;
         }
         if save_state
-            .accounts
+            .store
             .borrow()
+            .accounts()
             .iter()
             .any(|stored| stored.id != save_account_id && stored.name == next)
         {
@@ -1180,8 +1169,9 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
             None
         };
         if let Some(stored) = save_state
-            .accounts
+            .store
             .borrow_mut()
+            .accounts_mut()
             .iter_mut()
             .find(|stored| stored.id == save_account_id)
         {
@@ -1203,7 +1193,7 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
                 &monitor_row,
             );
         }
-        if let Err(error) = save_accounts(&save_state.accounts.borrow()) {
+        if let Err(error) = save_state.store.borrow().flush() {
             show_toast(&save_state, &format!("保存账号失败: {error}"));
             return;
         }
@@ -1573,14 +1563,10 @@ fn collect_config_edit(
 
 fn remove_profile(state: &Rc<AppState>, account: &Account) {
     let selected = state.selected_index.get();
-    state
-        .accounts
-        .borrow_mut()
-        .retain(|stored| stored.id != account.id);
-    state.selected_index.set(selected.saturating_sub(1));
-    if let Err(error) = save_accounts(&state.accounts.borrow()) {
+    if let Err(error) = state.store.borrow_mut().remove(&account.id) {
         show_toast(state, &format!("保存账号失败: {error}"));
     }
+    state.selected_index.set(selected.saturating_sub(1));
     if let Err(error) = remove_profile_sync_mode(&account.id) {
         show_toast(state, &format!("删除同步模式设置失败: {error}"));
     }
@@ -1619,4 +1605,17 @@ fn remove_profile(state: &Rc<AppState>, account: &Account) {
             }
         },
     );
+}
+
+/// Maps an AccountStore IO error back to a user-facing message, preserving the
+/// same wording the old BackendError-based add-dialog path produced.
+fn store_error_message(error: &std::io::Error) -> String {
+    let text = error.to_string();
+    if text.contains("DuplicateAccountName") {
+        "账户名称已存在".to_string()
+    } else if text.contains("DuplicateSyncDir") {
+        "同步目录已存在".to_string()
+    } else {
+        text
+    }
 }

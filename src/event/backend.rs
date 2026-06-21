@@ -1,3 +1,4 @@
+use super::OperationOutcome;
 use crate::event::error::{BackendError, ProcPhase};
 use crate::event::payload::{FileChange, PreviewChange};
 
@@ -44,11 +45,7 @@ pub enum BackendEvent {
     },
     SyncFinished {
         account_id: String,
-        success: bool,
-        requested_stop: bool,
-        auth_required: bool,
-        error: Option<BackendError>,
-        requires_confirmation: Option<ConfirmationKind>,
+        outcome: OperationOutcome,
     },
     TransferEvent {
         account_id: String,
@@ -60,11 +57,7 @@ pub enum BackendEvent {
     },
     PreviewFinished {
         account_id: String,
-        success: bool,
-        requested_stop: bool,
-        auth_required: bool,
-        error: Option<BackendError>,
-        requires_confirmation: Option<ConfirmationKind>,
+        outcome: OperationOutcome,
     },
     PreviewApplyFinished {
         account_id: String,
@@ -94,11 +87,7 @@ pub enum BackendEvent {
     },
     MonitorStopped {
         account_id: String,
-        success: bool,
-        requested_stop: bool,
-        auth_required: bool,
-        error: Option<BackendError>,
-        requires_confirmation: Option<ConfirmationKind>,
+        outcome: OperationOutcome,
     },
 }
 

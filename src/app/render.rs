@@ -22,17 +22,17 @@ pub(in crate::app) fn rebuild_profile_list(state: &Rc<AppState>) {
         state.profile_list.remove(&child);
     }
 
-    for (index, account) in state.accounts.borrow().iter().enumerate() {
+    for (index, account) in state.store.borrow().accounts().iter().enumerate() {
         state
             .profile_list
             .append(&build_profile_row(Rc::clone(state), account, index));
     }
 
-    if !state.accounts.borrow().is_empty() {
+    if !state.store.borrow().accounts().is_empty() {
         let selected = state
             .selected_index
             .get()
-            .min(state.accounts.borrow().len().saturating_sub(1));
+            .min(state.store.borrow().accounts().len().saturating_sub(1));
         state.selected_index.set(selected);
         if let Some(row) = state.profile_list.row_at_index(selected as i32) {
             state.profile_list.select_row(Some(&row));

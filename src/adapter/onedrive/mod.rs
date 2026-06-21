@@ -1,9 +1,7 @@
-mod auth;
 mod command;
 mod output;
 mod parse;
 mod process;
-mod run;
 
 pub use process::{SyncHandle as OperationHandle, stop_handle as stop_operation};
 pub use process::{

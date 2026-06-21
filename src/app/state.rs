@@ -1,11 +1,11 @@
 use super::widgets::TransferList;
 use crate::{
-    profile::Account,
-    operation::AccountOperation,
     adapter::onedrive::OperationHandle,
-    event::{BackendEvent, ClientCheck},
-    profile::SyncMode,
     event::payload::PreviewChange,
+    event::{BackendEvent, ClientCheck},
+    operation::OperationRegistry,
+    profile::SyncMode,
+    profile::{Account, AccountStore},
 };
 use std::{
     cell::{Cell, RefCell},
@@ -15,7 +15,7 @@ use std::{
 };
 
 pub(in crate::app) struct AppState {
-    pub(in crate::app) accounts: RefCell<Vec<Account>>,
+    pub(in crate::app) store: RefCell<AccountStore>,
     pub(in crate::app) selected_index: Cell<usize>,
     pub(in crate::app) client_check: RefCell<ClientCheck>,
     pub(in crate::app) onedrive_command: String,
@@ -23,7 +23,7 @@ pub(in crate::app) struct AppState {
     pub(in crate::app) receiver: RefCell<mpsc::Receiver<BackendEvent>>,
     pub(in crate::app) auth_panel: RefCell<Option<AuthPanel>>,
     pub(in crate::app) operation_handles: RefCell<HashMap<String, OperationHandle>>,
-    pub(in crate::app) operations: RefCell<HashMap<String, AccountOperation>>,
+    pub(in crate::app) operations: RefCell<OperationRegistry>,
     pub(in crate::app) previews: RefCell<HashMap<String, HashMap<String, PreviewChange>>>,
     pub(in crate::app) applying_preview_changes: RefCell<HashSet<(String, String)>>,
     pub(in crate::app) toast_overlay: adw::ToastOverlay,
@@ -47,15 +47,17 @@ pub(in crate::app) struct AppState {
 
 impl AppState {
     pub(in crate::app) fn selected_account(&self) -> Option<Account> {
-        self.accounts
+        self.store
             .borrow()
+            .accounts()
             .get(self.selected_index.get())
             .cloned()
     }
 
     pub(in crate::app) fn selected_account_id(&self) -> Option<String> {
-        self.accounts
+        self.store
             .borrow()
+            .accounts()
             .get(self.selected_index.get())
             .map(|account| account.id.clone())
     }

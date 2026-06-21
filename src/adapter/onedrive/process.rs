@@ -7,7 +7,7 @@ use super::{
     },
 };
 use crate::{
-    event::{BackendError, BackendEvent, ClientCheck, ProcPhase, Version},
+    event::{BackendError, BackendEvent, ClientCheck, OperationOutcome, ProcPhase, Version},
     profile::config::ensure_transfer_metrics_enabled,
     profile::{Account, auth_response_path, auth_url_path, is_authenticated},
 };
@@ -231,25 +231,29 @@ pub fn start_preview(
             Ok(success) => {
                 let _ = sender.send(BackendEvent::PreviewFinished {
                     account_id: account.id,
-                    success,
-                    requested_stop,
-                    auth_required: !success && is_auth_required(&combined),
-                    error: (!success && !requested_stop)
-                        .then(|| classify_onedrive_error(&combined)),
-                    requires_confirmation: parse_confirmation(&combined),
+                    outcome: OperationOutcome {
+                        success,
+                        requested_stop,
+                        auth_required: !success && is_auth_required(&combined),
+                        error: (!success && !requested_stop)
+                            .then(|| classify_onedrive_error(&combined)),
+                        requires_confirmation: parse_confirmation(&combined),
+                    },
                 });
             }
             Err(error) => {
                 let _ = sender.send(BackendEvent::PreviewFinished {
                     account_id: account.id,
-                    success: false,
-                    requested_stop,
-                    auth_required: false,
-                    error: Some(BackendError::WaitFailed(
-                        ProcPhase::Preview,
-                        error.to_string(),
-                    )),
-                    requires_confirmation: None,
+                    outcome: OperationOutcome {
+                        success: false,
+                        requested_stop,
+                        auth_required: false,
+                        error: Some(BackendError::WaitFailed(
+                            ProcPhase::Preview,
+                            error.to_string(),
+                        )),
+                        requires_confirmation: None,
+                    },
                 });
             }
         }
@@ -298,22 +302,26 @@ fn start_sync_with_options(
                 let auth_required = !success && is_auth_required(&combined);
                 let _ = sender.send(BackendEvent::SyncFinished {
                     account_id: account.id,
-                    success,
-                    requested_stop,
-                    auth_required,
-                    error: (!success && !requested_stop)
-                        .then(|| classify_onedrive_error(&combined)),
-                    requires_confirmation: parse_confirmation(&combined),
+                    outcome: OperationOutcome {
+                        success,
+                        requested_stop,
+                        auth_required,
+                        error: (!success && !requested_stop)
+                            .then(|| classify_onedrive_error(&combined)),
+                        requires_confirmation: parse_confirmation(&combined),
+                    },
                 });
             }
             Err(error) => {
                 let _ = sender.send(BackendEvent::SyncFinished {
                     account_id: account.id,
-                    success: false,
-                    requested_stop,
-                    auth_required: false,
-                    error: Some(BackendError::WaitFailed(ProcPhase::Sync, error.to_string())),
-                    requires_confirmation: None,
+                    outcome: OperationOutcome {
+                        success: false,
+                        requested_stop,
+                        auth_required: false,
+                        error: Some(BackendError::WaitFailed(ProcPhase::Sync, error.to_string())),
+                        requires_confirmation: None,
+                    },
                 });
             }
         }
@@ -351,11 +359,13 @@ pub fn start_monitor(
                     Err(_) => {
                         let _ = sender.send(BackendEvent::MonitorStopped {
                             account_id: account.id,
-                            success: false,
-                            requested_stop: wait_stop_requested.load(Ordering::SeqCst),
-                            auth_required: false,
-                            error: Some(BackendError::MonitorInaccessible),
-                            requires_confirmation: None,
+                            outcome: OperationOutcome {
+                                success: false,
+                                requested_stop: wait_stop_requested.load(Ordering::SeqCst),
+                                auth_required: false,
+                                error: Some(BackendError::MonitorInaccessible),
+                                requires_confirmation: None,
+                            },
                         });
                         return;
                     }
@@ -368,11 +378,13 @@ pub fn start_monitor(
                 Err(error) => {
                     let _ = sender.send(BackendEvent::MonitorStopped {
                         account_id: account.id,
-                        success: false,
-                        requested_stop: wait_stop_requested.load(Ordering::SeqCst),
-                        auth_required: false,
-                        error: Some(BackendError::MonitorPollFailed(error.to_string())),
-                        requires_confirmation: None,
+                        outcome: OperationOutcome {
+                            success: false,
+                            requested_stop: wait_stop_requested.load(Ordering::SeqCst),
+                            auth_required: false,
+                            error: Some(BackendError::MonitorPollFailed(error.to_string())),
+                            requires_confirmation: None,
+                        },
                     });
                     return;
                 }
@@ -385,11 +397,13 @@ pub fn start_monitor(
             .unwrap_or_default();
         let _ = sender.send(BackendEvent::MonitorStopped {
             account_id: account.id,
-            success,
-            requested_stop: wait_stop_requested.load(Ordering::SeqCst),
-            auth_required: !success && is_auth_required(&combined),
-            error: (!success).then(|| classify_onedrive_error(&combined)),
-            requires_confirmation: parse_confirmation(&combined),
+            outcome: OperationOutcome {
+                success,
+                requested_stop: wait_stop_requested.load(Ordering::SeqCst),
+                auth_required: !success && is_auth_required(&combined),
+                error: (!success).then(|| classify_onedrive_error(&combined)),
+                requires_confirmation: parse_confirmation(&combined),
+            },
         });
     });
 
@@ -697,13 +711,9 @@ mod tests {
         stop_handle(&handle).unwrap();
         let event = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
         match event {
-            BackendEvent::SyncFinished {
-                requested_stop,
-                auth_required,
-                ..
-            } => {
-                assert!(requested_stop);
-                assert!(!auth_required);
+            BackendEvent::SyncFinished { outcome, .. } => {
+                assert!(outcome.requested_stop);
+                assert!(!outcome.auth_required);
             }
             other => panic!("expected SyncFinished, got {other:?}"),
         }
@@ -761,8 +771,11 @@ mod tests {
         assert!(matches!(
             event,
             BackendEvent::SyncFinished {
-                success: true,
-                requested_stop: false,
+                outcome: OperationOutcome {
+                    success: true,
+                    requested_stop: false,
+                    ..
+                },
                 ..
             }
         ));
@@ -823,8 +836,11 @@ mod tests {
         assert!(matches!(
             event,
             BackendEvent::SyncFinished {
-                success: true,
-                requested_stop: false,
+                outcome: OperationOutcome {
+                    success: true,
+                    requested_stop: false,
+                    ..
+                },
                 ..
             }
         ));
@@ -894,8 +910,11 @@ mod tests {
         assert!(events.iter().any(|event| matches!(
             event,
             BackendEvent::PreviewFinished {
-                success: true,
-                requested_stop: false,
+                outcome: OperationOutcome {
+                    success: true,
+                    requested_stop: false,
+                    ..
+                },
                 ..
             }
         )));
@@ -954,13 +973,9 @@ mod tests {
         stop_handle(&handle).unwrap();
         let event = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
         match event {
-            BackendEvent::PreviewFinished {
-                requested_stop,
-                auth_required,
-                ..
-            } => {
-                assert!(requested_stop);
-                assert!(!auth_required);
+            BackendEvent::PreviewFinished { outcome, .. } => {
+                assert!(outcome.requested_stop);
+                assert!(!outcome.auth_required);
             }
             other => panic!("expected PreviewFinished, got {other:?}"),
         }

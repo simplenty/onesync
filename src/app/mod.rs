@@ -12,19 +12,25 @@ use crate::{
         graph::start_account_identity_lookup,
         onedrive::{check_client, stop_operation},
     },
-    event::{
-        ClientCheck,
+    event::ClientCheck,
+    operation::OperationRegistry,
+    profile::{
+        Account, AccountStatus, AccountStore, DEFAULT_ONEDRIVE_COMMAND, SyncMode, is_authenticated,
+        load_onedrive_command, load_store, save_profile_sync_mode,
     },
-    profile::{Account, AccountStatus, DEFAULT_ONEDRIVE_COMMAND, SyncMode, is_authenticated, load_onedrive_command, load_store, save_accounts, save_profile_sync_mode},
 };
-use actions::{connect_preview_row_actions, start_or_stop_auto_sync_for_account, start_or_stop_manual_one_time_sync_for_account, start_or_stop_preview_for_account};
+use actions::{
+    connect_preview_row_actions, start_or_stop_auto_sync_for_account,
+    start_or_stop_manual_one_time_sync_for_account, start_or_stop_preview_for_account,
+};
 use adw::prelude::*;
 use events::{
-    begin_operation, can_mutate_profile, finish_operation, install_backend_event_pump, stop_all_monitors,
+    begin_operation, can_mutate_profile, finish_operation, install_backend_event_pump,
+    stop_all_monitors,
 };
 use gtk::glib;
 use layout::{build_content_widgets, build_sidebar};
-use widgets::TransferList;
+pub(in crate::app) use present::*;
 use render::{rebuild_profile_list, refresh_content, show_toast};
 use state::AppState;
 use std::{
@@ -33,7 +39,7 @@ use std::{
     rc::Rc,
     sync::mpsc,
 };
-pub(in crate::app) use present::*;
+use widgets::TransferList;
 
 const APP_ID: &str = "io.github.onesync.Demo";
 
@@ -61,11 +67,11 @@ fn build_ui(app: &adw::Application) {
             DEFAULT_ONEDRIVE_COMMAND.to_string()
         }
     };
-    let accounts = match load_store() {
-        Ok(store) => store.accounts,
+    let store = match load_store() {
+        Ok(store) => store,
         Err(error) => {
             eprintln!("failed to load account store: {error}");
-            Vec::new()
+            AccountStore::default()
         }
     };
 
@@ -87,7 +93,7 @@ fn build_ui(app: &adw::Application) {
 
     let (content, content_widgets) = build_content_widgets();
     let state = Rc::new(AppState {
-        accounts: RefCell::new(accounts),
+        store: RefCell::new(store),
         selected_index: Cell::new(0),
         client_check: RefCell::new(ClientCheck::Unknown),
         onedrive_command: configured_onedrive_command,
@@ -95,7 +101,7 @@ fn build_ui(app: &adw::Application) {
         receiver: RefCell::new(receiver),
         auth_panel: RefCell::new(None),
         operation_handles: RefCell::new(HashMap::new()),
-        operations: RefCell::new(HashMap::new()),
+        operations: RefCell::new(OperationRegistry::default()),
         previews: RefCell::new(HashMap::new()),
         applying_preview_changes: RefCell::new(std::collections::HashSet::new()),
         pending_confirmation: RefCell::new(None),
@@ -134,7 +140,7 @@ fn build_ui(app: &adw::Application) {
 
     window.set_content(Some(&toast_overlay));
     window.present();
-    if state.accounts.borrow().is_empty() {
+    if state.store.borrow().accounts().is_empty() {
         dialogs::profile::show_add_account_dialog(Rc::clone(&state));
     }
 }
@@ -246,15 +252,7 @@ pub(in crate::app) fn update_account_status(
     account_id: &str,
     status: AccountStatus,
 ) {
-    if let Some(account) = state
-        .accounts
-        .borrow_mut()
-        .iter_mut()
-        .find(|account| account.id == account_id)
-    {
-        account.status = status;
-    }
-    if let Err(error) = save_accounts(&state.accounts.borrow()) {
+    if let Err(error) = state.store.borrow_mut().update_status(account_id, status) {
         show_toast(state, &format!("保存账号状态失败: {error}"));
     }
     rebuild_profile_list(state);
@@ -262,7 +260,7 @@ pub(in crate::app) fn update_account_status(
 }
 
 fn refresh_accounts_from_disk(state: &AppState) {
-    for account in state.accounts.borrow_mut().iter_mut() {
+    for account in state.store.borrow_mut().accounts_mut() {
         if is_authenticated(account) {
             account.status = AccountStatus::Authenticated;
         } else {
@@ -273,8 +271,9 @@ fn refresh_accounts_from_disk(state: &AppState) {
 
 fn start_missing_identity_lookups(state: &AppState) {
     let accounts: Vec<Account> = state
-        .accounts
+        .store
         .borrow()
+        .accounts()
         .iter()
         .filter(|account| is_authenticated(account) && needs_identity_lookup(account))
         .cloned()

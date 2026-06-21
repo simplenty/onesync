@@ -1,6 +1,7 @@
 use super::{
-    backend_error_message, client_check_message, confirmation_kind_message, operation_label,
+    backend_error_message, client_check_message, confirmation_kind_message,
     dialogs::{auth, confirm},
+    operation_label,
     render::{rebuild_profile_list, refresh_content, show_toast},
     state::AppState,
     status_label, update_account_status,
@@ -10,9 +11,9 @@ use crate::{
         graph::start_account_identity_lookup,
         onedrive::{OperationHandle, stop_operation},
     },
-    event::{BackendError, BackendEvent, ConfirmationKind},
-    operation::{AccountOperation, OperationKind, OperationPhase},
-    profile::{Account, AccountStatus, save_accounts},
+    event::{BackendError, BackendEvent, ConfirmationKind, OperationOutcome},
+    operation::{AccountOperation, OperationKind},
+    profile::{Account, AccountStatus},
 };
 use adw::prelude::*;
 use gtk::glib;
@@ -124,40 +125,9 @@ fn drain_backend_events(state: &Rc<AppState>) {
             }
             BackendEvent::SyncFinished {
                 account_id,
-                success,
-                requested_stop,
-                auth_required,
-                error,
-                requires_confirmation,
+                outcome,
             } => {
-                state.operation_handles.borrow_mut().remove(&account_id);
-                finish_operation(state, &account_id);
-                if auth_required {
-                    handle_auth_required(Rc::clone(state), &account_id, error);
-                    continue;
-                }
-                let status = if success || requested_stop || requires_confirmation.is_some() {
-                    AccountStatus::Authenticated
-                } else {
-                    AccountStatus::Error(
-                        error
-                            .as_ref()
-                            .map(backend_error_message)
-                            .unwrap_or_else(|| "同步失败".to_string()),
-                    )
-                };
-                update_account_status(state, &account_id, status);
-                if let Some(kind) = requires_confirmation {
-                    if state.pending_confirmation.borrow().is_none() {
-                        handle_confirmation_required(Rc::clone(state), &account_id, kind);
-                    }
-                } else if requested_stop {
-                    show_toast(state, "同步已停止");
-                } else if success {
-                    show_toast(state, "同步完成");
-                } else if let Some(account) = state.selected_account() {
-                    show_toast(state, status_label(&account.status));
-                }
+                apply_outcome(state, &account_id, outcome, "同步已停止", "同步完成");
             }
             BackendEvent::TransferEvent { account_id, file } => {
                 if state
@@ -183,28 +153,25 @@ fn drain_backend_events(state: &Rc<AppState>) {
             }
             BackendEvent::PreviewFinished {
                 account_id,
-                success,
-                requested_stop,
-                auth_required,
-                error,
-                requires_confirmation,
+                outcome,
             } => {
                 state.operation_handles.borrow_mut().remove(&account_id);
                 finish_operation(state, &account_id);
-                if auth_required {
-                    handle_auth_required(Rc::clone(state), &account_id, error);
+                if outcome.auth_required {
+                    handle_auth_required(Rc::clone(state), &account_id, outcome.error);
                     continue;
                 }
-                if let Some(kind) = requires_confirmation {
+                if let Some(kind) = outcome.requires_confirmation {
                     handle_confirmation_required(Rc::clone(state), &account_id, kind);
-                } else if requested_stop {
+                } else if outcome.requested_stop {
                     show_toast(state, "预览已停止");
-                } else if success {
+                } else if outcome.success {
                     show_toast(state, "预览完成");
                 } else {
                     show_toast(
                         state,
-                        &error
+                        &outcome
+                            .error
                             .as_ref()
                             .map(backend_error_message)
                             .unwrap_or_else(|| "预览失败".to_string()),
@@ -228,11 +195,9 @@ fn drain_backend_events(state: &Rc<AppState>) {
                         .as_ref()
                         .map(backend_error_message)
                         .unwrap_or_else(|| "应用失败".to_string());
-                    state.transfers.mark_preview_failed(
-                        &account_id,
-                        &change_id,
-                        &message,
-                    );
+                    state
+                        .transfers
+                        .mark_preview_failed(&account_id, &change_id, &message);
                     show_toast(state, &message);
                 }
             }
@@ -286,36 +251,36 @@ fn drain_backend_events(state: &Rc<AppState>) {
             }
             BackendEvent::MonitorStopped {
                 account_id,
-                success,
-                requested_stop,
-                auth_required,
-                error,
-                requires_confirmation,
+                outcome,
             } => {
                 state.operation_handles.borrow_mut().remove(&account_id);
                 finish_operation(state, &account_id);
-                if auth_required {
-                    handle_auth_required(Rc::clone(state), &account_id, error);
+                if outcome.auth_required {
+                    handle_auth_required(Rc::clone(state), &account_id, outcome.error);
                     continue;
                 }
-                let status = if success || requested_stop || requires_confirmation.is_some() {
+                let status = if outcome.success
+                    || outcome.requested_stop
+                    || outcome.requires_confirmation.is_some()
+                {
                     AccountStatus::Authenticated
                 } else {
                     AccountStatus::Error(
-                        error
+                        outcome
+                            .error
                             .as_ref()
                             .map(backend_error_message)
                             .unwrap_or_else(|| "持续同步停止".to_string()),
                     )
                 };
                 update_account_status(state, &account_id, status);
-                if let Some(kind) = requires_confirmation {
+                if let Some(kind) = outcome.requires_confirmation {
                     if state.pending_confirmation.borrow().is_none() {
                         handle_confirmation_required(Rc::clone(state), &account_id, kind);
                     }
-                } else if requested_stop {
+                } else if outcome.requested_stop {
                     show_toast(state, "持续同步已停止");
-                } else if success {
+                } else if outcome.success {
                     show_toast(state, "持续同步已结束");
                 } else {
                     show_toast(state, "持续同步异常停止");
@@ -338,11 +303,53 @@ pub(super) fn stop_sync(state: &AppState, account_id: &str, message: &str) {
     }
 }
 
+fn apply_outcome(
+    state: &Rc<AppState>,
+    account_id: &str,
+    outcome: OperationOutcome,
+    stop_message: &str,
+    success_message: &str,
+) {
+    state.operation_handles.borrow_mut().remove(account_id);
+    finish_operation(state, account_id);
+    if outcome.auth_required {
+        handle_auth_required(Rc::clone(state), account_id, outcome.error);
+        return;
+    }
+    let status =
+        if outcome.success || outcome.requested_stop || outcome.requires_confirmation.is_some() {
+            AccountStatus::Authenticated
+        } else {
+            AccountStatus::Error(
+                outcome
+                    .error
+                    .as_ref()
+                    .map(backend_error_message)
+                    .unwrap_or_else(|| "操作失败".to_string()),
+            )
+        };
+    update_account_status(state, account_id, status);
+    if let Some(kind) = outcome.requires_confirmation {
+        if state.pending_confirmation.borrow().is_none() {
+            handle_confirmation_required(Rc::clone(state), account_id, kind);
+        }
+    } else if outcome.requested_stop {
+        show_toast(state, stop_message);
+    } else if outcome.success {
+        show_toast(state, success_message);
+    } else if let Some(account) = state.selected_account() {
+        show_toast(state, status_label(&account.status));
+    }
+}
+
 fn handle_confirmation_required(state: Rc<AppState>, account_id: &str, kind: ConfirmationKind) {
     if state.pending_confirmation.borrow().is_some() {
         return;
     }
-    state.pending_confirmation.borrow_mut().replace(account_id.to_string());
+    state
+        .pending_confirmation
+        .borrow_mut()
+        .replace(account_id.to_string());
     if matches!(kind, ConfirmationKind::ResyncRequired)
         && let Some(account) = account_by_id(&state, account_id)
     {
@@ -401,55 +408,51 @@ pub(super) fn is_sync_running(state: &AppState, account_id: &str) -> bool {
 }
 
 pub(super) fn operation(state: &AppState, account_id: &str) -> Option<AccountOperation> {
-    state.operations.borrow().get(account_id).copied()
+    state.operations.borrow().get(account_id)
 }
 
 pub(super) fn can_mutate_profile(state: &AppState, account: &Account) -> bool {
-    !state.operations.borrow().contains_key(&account.id)
+    !state.operations.borrow().contains(&account.id)
         && !is_sync_running(state, &account.id)
         && !is_monitor_running(state, &account.id)
 }
 
 pub(super) fn begin_operation(state: &AppState, account_id: &str, kind: OperationKind) -> bool {
-    if state.operations.borrow().contains_key(account_id) {
+    if state.operations.borrow().contains(account_id) {
         show_operation_toast(state, account_id);
         return false;
     }
-    state.operations.borrow_mut().insert(
-        account_id.to_string(),
-        AccountOperation {
-            kind,
-            phase: OperationPhase::Running,
-        },
-    );
+    state
+        .operations
+        .borrow_mut()
+        .begin(account_id.to_string(), kind);
     refresh_content(state);
     true
 }
 
 pub(super) fn mark_stopping(state: &AppState, account_id: &str) {
-    if let Some(operation) = state.operations.borrow_mut().get_mut(account_id) {
-        operation.phase = OperationPhase::Stopping;
-    }
+    state.operations.borrow_mut().mark_stopping(account_id);
     refresh_content(state);
 }
 
 pub(super) fn finish_operation(state: &AppState, account_id: &str) {
-    state.operations.borrow_mut().remove(account_id);
+    state.operations.borrow_mut().finish(account_id);
     refresh_content(state);
 }
 
-    pub(super) fn show_operation_toast(state: &AppState, account_id: &str) {
-        let message = operation(state, account_id)
-            .map_or("该账户正在运行操作".to_string(), |operation| {
-                format!("该账户正在执行{}", operation_label(operation))
-            });
+pub(super) fn show_operation_toast(state: &AppState, account_id: &str) {
+    let message = operation(state, account_id)
+        .map_or("该账户正在运行操作".to_string(), |operation| {
+            format!("该账户正在执行{}", operation_label(operation))
+        });
     show_toast(state, &message);
 }
 
 fn account_by_id(state: &AppState, account_id: &str) -> Option<Account> {
     state
-        .accounts
+        .store
         .borrow()
+        .accounts()
         .iter()
         .find(|account| account.id == account_id)
         .cloned()
@@ -461,40 +464,17 @@ fn update_account_identity(
     display_name: Option<&str>,
     email: Option<&str>,
 ) -> bool {
-    let mut changed = false;
+    match state
+        .store
+        .borrow_mut()
+        .update_identity(account_id, display_name, email)
     {
-        let mut accounts = state.accounts.borrow_mut();
-        let Some(account) = accounts.iter_mut().find(|account| account.id == account_id) else {
-            return false;
-        };
-        let should_replace_name = should_replace_profile_name(&account.name, &account.email);
-
-        if let Some(email) = email
-            && account.email != email
-        {
-            account.email = email.to_string();
-            changed = true;
-        }
-
-        if let Some(display_name) = display_name
-            && should_replace_name
-            && account.name != display_name
-        {
-            account.name = display_name.to_string();
-            changed = true;
+        Ok(changed) => changed,
+        Err(error) => {
+            show_toast(state, &format!("保存账号信息失败: {error}"));
+            false
         }
     }
-
-    if changed && let Err(error) = save_accounts(&state.accounts.borrow()) {
-        show_toast(state, &format!("保存账号信息失败: {error}"));
-    }
-
-    changed
-}
-
-fn should_replace_profile_name(current_name: &str, current_email: &str) -> bool {
-    let name = current_name.trim();
-    name.is_empty() || name == "OneDrive" || name.starts_with("OneDrive ") || name == current_email
 }
 
 fn handle_auth_required(state: Rc<AppState>, account_id: &str, error: Option<BackendError>) {
@@ -507,8 +487,9 @@ fn handle_auth_required(state: Rc<AppState>, account_id: &str, error: Option<Bac
             .unwrap_or_else(|| "认证已失效，请重新完成登录".to_string()),
     );
     let account = state
-        .accounts
+        .store
         .borrow()
+        .accounts()
         .iter()
         .find(|account| account.id == account_id)
         .cloned();
