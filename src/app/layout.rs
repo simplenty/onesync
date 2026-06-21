@@ -18,6 +18,8 @@ pub(in crate::app) struct ContentWidgets {
     pub(in crate::app) files_list: gtk::ListBox,
     pub(in crate::app) account_menu_button: gtk::MenuButton,
     pub(in crate::app) settings_button: gtk::Button,
+    pub(in crate::app) open_sync_dir_button: gtk::Button,
+    pub(in crate::app) resync_button: gtk::Button,
     pub(in crate::app) mode_dropdown: gtk::DropDown,
     pub(in crate::app) sync_button: gtk::Button,
     pub(in crate::app) preview_button: gtk::Button,
@@ -138,6 +140,8 @@ pub(in crate::app) fn build_content_widgets() -> (adw::ToolbarView, ContentWidge
     let sync_button = command_button("view-refresh-symbolic", "同步");
     let preview_button = command_button("view-list-symbolic", "预览");
     let edit_button = command_button("document-edit-symbolic", "编辑账户");
+    let open_sync_dir_button = command_button("folder-open-symbolic", "打开同步目录");
+    let resync_button = command_button("view-refresh-symbolic", "重新扫描");
     actions.append(&mode_dropdown);
     actions.append(&sync_button);
     actions.append(&preview_button);
@@ -152,6 +156,14 @@ pub(in crate::app) fn build_content_widgets() -> (adw::ToolbarView, ContentWidge
         &edit_button,
         "document-edit-symbolic",
         "编辑账户",
+    ), (
+        &open_sync_dir_button,
+        "folder-open-symbolic",
+        "打开同步目录",
+    ), (
+        &resync_button,
+        "view-refresh-symbolic",
+        "重新扫描",
     )])));
     actions.append(&account_menu_button);
 
@@ -188,6 +200,8 @@ pub(in crate::app) fn build_content_widgets() -> (adw::ToolbarView, ContentWidge
             preview_button,
             auth_button,
             edit_button,
+            open_sync_dir_button,
+            resync_button,
         },
     )
 }

@@ -120,6 +120,8 @@ pub(in crate::app) fn refresh_content(state: &AppState) {
         state.preview_button.set_sensitive(false);
         state.preview_button.set_visible(true);
         state.auth_button.set_visible(false);
+        state.open_sync_dir_button.set_sensitive(false);
+        state.resync_button.set_sensitive(false);
         state.edit_button.set_sensitive(false);
         state.transfers.clear();
         return;
@@ -178,6 +180,9 @@ pub(in crate::app) fn refresh_content(state: &AppState) {
     let is_unauth = !matches!(account.status, AccountStatus::Authenticated);
     state.auth_button.set_visible(is_unauth);
     state.mode_dropdown.set_visible(!is_unauth);
+    state.edit_button.set_sensitive(true);
+    state.open_sync_dir_button.set_sensitive(true);
+    state.resync_button.set_sensitive(!is_unauth && client_ready && runtime == CommandRuntime::Idle);
 }
 
 pub(in crate::app) fn show_toast(state: &AppState, message: &str) {

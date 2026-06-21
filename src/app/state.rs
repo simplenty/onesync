@@ -40,6 +40,8 @@ pub(in crate::app) struct AppState {
     pub(in crate::app) updating_sync_mode_dropdown: Cell<bool>,
     pub(in crate::app) sync_button: gtk::Button,
     pub(in crate::app) preview_button: gtk::Button,
+    pub(in crate::app) open_sync_dir_button: gtk::Button,
+    pub(in crate::app) resync_button: gtk::Button,
     pub(in crate::app) edit_button: gtk::Button,
     pub(in crate::app) auth_button: gtk::Button,
     pub(in crate::app) pending_confirmation: RefCell<Option<String>>,

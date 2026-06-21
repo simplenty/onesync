@@ -20,7 +20,7 @@ use crate::{
     },
 };
 use actions::{
-    connect_preview_row_actions, start_or_stop_auto_sync_for_account,
+    connect_preview_row_actions, open_sync_dir_for_account, start_or_stop_auto_sync_for_account,
     start_or_stop_manual_one_time_sync_for_account, start_or_stop_preview_for_account,
 };
 use adw::prelude::*;
@@ -120,6 +120,8 @@ fn build_ui(app: &adw::Application) {
         sync_button: content_widgets.sync_button,
         preview_button: content_widgets.preview_button,
         edit_button: content_widgets.edit_button,
+        open_sync_dir_button: content_widgets.open_sync_dir_button,
+        resync_button: content_widgets.resync_button,
         auth_button: content_widgets.auth_button,
     });
 
@@ -198,6 +200,26 @@ fn connect_actions(state: Rc<AppState>) {
             return;
         };
         dialogs::profile::show_edit_profile_dialog(Rc::clone(&edit_state), account);
+    });
+
+    let open_dir_state = Rc::clone(&state);
+    state.open_sync_dir_button.connect_clicked(move |_| {
+        open_dir_state.account_menu_button.popdown();
+        let Some(account) = open_dir_state.selected_account() else {
+            show_toast(&open_dir_state, "请先选择账号");
+            return;
+        };
+        open_sync_dir_for_account(&open_dir_state, &account);
+    });
+
+    let resync_state = Rc::clone(&state);
+    state.resync_button.connect_clicked(move |_| {
+        resync_state.account_menu_button.popdown();
+        let Some(account) = resync_state.selected_account() else {
+            show_toast(&resync_state, "请先选择账号");
+            return;
+        };
+        dialogs::confirm::show_resync_confirmation(Rc::clone(&resync_state), account);
     });
 
     let auth_state = Rc::clone(&state);
