@@ -1,6 +1,7 @@
 use super::widgets::TransferList;
 use crate::{
     adapter::onedrive::OperationHandle,
+    app::tray::{AppTrayHandle, TraySnapshot},
     event::payload::PreviewChange,
     event::{BackendEvent, ClientCheck},
     operation::OperationRegistry,
@@ -45,6 +46,8 @@ pub(in crate::app) struct AppState {
     pub(in crate::app) edit_button: gtk::Button,
     pub(in crate::app) auth_button: gtk::Button,
     pub(in crate::app) pending_confirmation: RefCell<Option<String>>,
+    pub(in crate::app) tray_handle: RefCell<Option<AppTrayHandle>>,
+    pub(in crate::app) tray_snapshot: RefCell<Option<std::sync::Arc<std::sync::Mutex<TraySnapshot>>>>,
 }
 
 impl AppState {

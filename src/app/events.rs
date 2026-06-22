@@ -391,6 +391,7 @@ pub(super) fn stop_all_monitors(state: &AppState) {
     for handle in handles {
         let _ = stop_operation(&handle);
     }
+    super::push_tray_snapshot(state);
 }
 
 pub(super) fn is_monitor_running(state: &AppState, account_id: &str) -> bool {
@@ -427,17 +428,20 @@ pub(super) fn begin_operation(state: &AppState, account_id: &str, kind: Operatio
         .borrow_mut()
         .begin(account_id.to_string(), kind);
     refresh_content(state);
+    super::push_tray_snapshot(state);
     true
 }
 
 pub(super) fn mark_stopping(state: &AppState, account_id: &str) {
     state.operations.borrow_mut().mark_stopping(account_id);
     refresh_content(state);
+    super::push_tray_snapshot(state);
 }
 
 pub(super) fn finish_operation(state: &AppState, account_id: &str) {
     state.operations.borrow_mut().finish(account_id);
     refresh_content(state);
+    super::push_tray_snapshot(state);
 }
 
 pub(super) fn show_operation_toast(state: &AppState, account_id: &str) {

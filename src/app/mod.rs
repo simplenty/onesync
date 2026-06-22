@@ -5,6 +5,7 @@ mod layout;
 mod present;
 mod render;
 mod state;
+mod tray;
 mod widgets;
 
 use crate::{
@@ -24,11 +25,9 @@ use actions::{
     start_or_stop_manual_one_time_sync_for_account, start_or_stop_preview_for_account,
 };
 use adw::prelude::*;
-use events::{
-    begin_operation, can_mutate_profile, finish_operation, install_backend_event_pump,
-    stop_all_monitors,
-};
+use events::{begin_operation, can_mutate_profile, finish_operation, install_backend_event_pump};
 use gtk::glib;
+use gtk::prelude::{GtkApplicationExt, GtkWindowExt};
 use layout::{build_content_widgets, build_sidebar};
 pub(in crate::app) use present::*;
 use render::{rebuild_profile_list, refresh_content, show_toast};
@@ -46,7 +45,17 @@ const APP_ID: &str = "io.github.simplenty.onesync";
 pub fn run() -> glib::ExitCode {
     let app = adw::Application::builder().application_id(APP_ID).build();
 
-    app.connect_activate(build_ui);
+    app.connect_activate(|app| {
+        // ponytail: GTK Application is unique by default (D-Bus registration of
+        // APP_ID), so a second launch forwards `activate` here instead of
+        // spawning a new process. Re-present the existing window rather than
+        // rebuilding the UI on each activation.
+        if let Some(win) = app.active_window() {
+            win.present();
+            return;
+        }
+        build_ui(app);
+    });
     app.run()
 }
 
@@ -105,6 +114,8 @@ fn build_ui(app: &adw::Application) {
         previews: RefCell::new(HashMap::new()),
         applying_preview_changes: RefCell::new(std::collections::HashSet::new()),
         pending_confirmation: RefCell::new(None),
+        tray_handle: RefCell::new(None),
+        tray_snapshot: RefCell::new(None),
         toast_overlay: toast_overlay.clone(),
         window: window.clone(),
         profile_list,
@@ -125,10 +136,33 @@ fn build_ui(app: &adw::Application) {
         auth_button: content_widgets.auth_button,
     });
 
+    // ── system tray (ksni) ──
+    let (tray_handle, tray_snapshot_arc, tray_rx) = tray::init();
+    *state.tray_handle.borrow_mut() = Some(tray_handle);
+    *state.tray_snapshot.borrow_mut() = Some(tray_snapshot_arc.clone());
+
+    // Dispatch TrayAction on GTK main thread via idle_add_local
+    let tray_state = Rc::clone(&state);
+    glib::idle_add_local(move || {
+        while let Ok(action) = tray_rx.try_recv() {
+            tray::handle_action(action, &tray_state);
+        }
+        glib::ControlFlow::Continue
+    });
+
+    // Push initial snapshot
+    if let Some(ref handle) = *state.tray_handle.borrow() {
+        let snap = tray::build_snapshot(
+            &state.store.borrow().accounts(),
+            &state.operations.borrow(),
+        );
+        tray::push_snapshot(handle, &tray_snapshot_arc, snap);
+    }
+
     let sidebar = build_sidebar(Rc::clone(&state));
     connect_actions(Rc::clone(&state));
     connect_preview_row_actions(Rc::clone(&state));
-    connect_shutdown(Rc::clone(&state));
+    connect_hide_on_close(Rc::clone(&state));
     refresh_accounts_from_disk(&state);
     rebuild_profile_list(&state);
     refresh_content(&state);
@@ -235,11 +269,11 @@ fn connect_actions(state: Rc<AppState>) {
     });
 }
 
-fn connect_shutdown(state: Rc<AppState>) {
+fn connect_hide_on_close(state: Rc<AppState>) {
     let window = state.window.clone();
-    window.connect_close_request(move |_| {
-        stop_all_monitors(&state);
-        glib::Propagation::Proceed
+    window.connect_close_request(move |win| {
+        win.set_visible(false);
+        glib::Propagation::Stop
     });
 }
 
@@ -280,6 +314,19 @@ pub(in crate::app) fn update_account_status(
     }
     rebuild_profile_list(state);
     refresh_content(state);
+    push_tray_snapshot(state);
+}
+
+fn push_tray_snapshot(state: &AppState) {
+    if let Some(ref handle) = *state.tray_handle.borrow() {
+        if let Some(ref arc) = *state.tray_snapshot.borrow() {
+            let snap = tray::build_snapshot(
+                &state.store.borrow().accounts(),
+                &state.operations.borrow(),
+            );
+            tray::push_snapshot(handle, arc, snap);
+        }
+    }
 }
 
 fn refresh_accounts_from_disk(state: &AppState) {
