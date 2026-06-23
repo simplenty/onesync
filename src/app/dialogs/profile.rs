@@ -4,15 +4,17 @@ use super::super::{
     can_mutate_profile,
     dialogs::auth::show_auth_dialog,
     dialogs::confirm,
+    present::backend_error_message,
     render::{rebuild_profile_list, refresh_content, show_toast},
     state::AppState,
     status_label,
     widgets::form_row,
 };
+use crate::event::BackendError;
 use crate::profile::remove_profile_sync_mode;
 use crate::profile::{
     Account, AccountStatus, ConfigEdit, OneDriveConfig, read_sync_list,
-    remove_confirmation_matches, suggested_account_name, suggested_sync_dir, write_sync_list,
+    remove_confirmation_matches, save_profile_edit, suggested_account_name, suggested_sync_dir,
 };
 use crate::utils::expand_home;
 use adw::prelude::*;
@@ -108,12 +110,8 @@ fn monitor_summary(edit: &ConfigEdit) -> String {
     }
 }
 
-fn account_location_summary(account: &Account, _edit: &ConfigEdit) -> String {
+fn account_location_summary(account: &Account) -> String {
     format!("{}·{}", account.name, status_label(&account.status))
-}
-
-fn set_row_subtitle(row: &adw::ActionRow, subtitle: impl AsRef<str>) {
-    row.set_subtitle(subtitle.as_ref());
 }
 
 fn refresh_profile_overview_rows(
@@ -124,16 +122,12 @@ fn refresh_profile_overview_rows(
     direction_row: &adw::ActionRow,
     monitor_row: &adw::ActionRow,
 ) {
-    set_row_subtitle(
-        account_location_row,
-        account_location_summary(account, edit),
+    account_location_row.set_subtitle(account_location_summary(account).as_ref());
+    scope_row.set_subtitle(scope_summary(edit).as_ref());
+    direction_row.set_subtitle(
+        direction_title(SyncDirectionChoice::from_edit(edit), edit.no_remote_delete).as_ref(),
     );
-    set_row_subtitle(scope_row, scope_summary(edit));
-    set_row_subtitle(
-        direction_row,
-        direction_title(SyncDirectionChoice::from_edit(edit), edit.no_remote_delete),
-    );
-    set_row_subtitle(monitor_row, monitor_summary(edit));
+    monitor_row.set_subtitle(monitor_summary(edit).as_ref());
 }
 
 fn direction_choice_row(
@@ -284,7 +278,11 @@ pub(in crate::app) fn show_add_account_dialog(state: Rc<AppState>) {
     add_button.connect_clicked(move |_| {
         let name = name_entry.text().trim().to_string();
         let sync_dir = sync_dir_entry.text().trim().to_string();
-        let account_result = dialog_state.store.borrow_mut().add(&name, "", &sync_dir);
+        let account_result = dialog_state
+            .store
+            .borrow_mut()
+            .add(&name, "", &sync_dir)
+            .map_err(BackendError::from);
         match account_result {
             Ok(account) => {
                 let auth_account = account.clone();
@@ -305,7 +303,7 @@ pub(in crate::app) fn show_add_account_dialog(state: Rc<AppState>) {
             }
             Err(error) => show_toast(
                 &dialog_state,
-                &format!("添加账号失败: {}", store_error_message(&error)),
+                &format!("添加账号失败: {}", backend_error_message(&error)),
             ),
         }
     });
@@ -379,7 +377,7 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
 
     let account_location_row = adw::ActionRow::builder()
         .title("账户信息")
-        .subtitle(account_location_summary(&account, &original_config_edit))
+        .subtitle(account_location_summary(&account))
         .activatable(can_mutate)
         .build();
     account_location_row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
@@ -1196,28 +1194,15 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
         let mut needs_resync = false;
         let mut sync_dir_changed = false;
         if let Some(next_config_edit) = next_config_edit.as_ref() {
-            let config_path = std::path::Path::new(&save_account.config_dir).join("config");
-            let mut config = match OneDriveConfig::read(&config_path) {
-                Ok(config) => config,
+            match save_profile_edit(&save_account, &original_config_edit, next_config_edit) {
+                Ok(outcome) => {
+                    needs_resync = outcome.needs_resync;
+                    sync_dir_changed = outcome.sync_dir_changed;
+                }
                 Err(error) => {
-                    show_toast(&save_state, &format!("读取 Profile 配置失败: {error}"));
+                    show_toast(&save_state, &error.to_string());
                     return;
                 }
-            };
-            needs_resync = original_config_edit.requires_resync_from(next_config_edit);
-            sync_dir_changed = original_config_edit.sync_dir != next_config_edit.sync_dir;
-            let mut config_without_sync_list = next_config_edit.clone();
-            config_without_sync_list.sync_list.clear();
-            config.apply_edit(&config_without_sync_list);
-            if let Err(error) = config.write_with_backup(&config_path) {
-                show_toast(&save_state, &format!("保存 Profile 配置失败: {error}"));
-                return;
-            }
-            if let Err(error) =
-                write_sync_list(&save_account.config_dir, &next_config_edit.sync_list)
-            {
-                show_toast(&save_state, &format!("保存选择性同步列表失败: {error}"));
-                return;
             }
         }
         rebuild_profile_list(&save_state);
@@ -1473,6 +1458,8 @@ fn split_lines(value: &str) -> Vec<String> {
         .collect()
 }
 
+// ponytail: 15 widget refs are UI-glue; grouping into a struct is a separate UI refactor
+#[allow(clippy::too_many_arguments)]
 fn collect_config_edit(
     original: &ConfigEdit,
     sync_dir_row: &adw::EntryRow,
@@ -1598,17 +1585,4 @@ fn remove_profile(state: &Rc<AppState>, account: &Account) {
             }
         },
     );
-}
-
-/// Maps an AccountStore IO error back to a user-facing message, preserving the
-/// same wording the old BackendError-based add-dialog path produced.
-fn store_error_message(error: &std::io::Error) -> String {
-    let text = error.to_string();
-    if text.contains("DuplicateAccountName") {
-        "账户名称已存在".to_string()
-    } else if text.contains("DuplicateSyncDir") {
-        "同步目录已存在".to_string()
-    } else {
-        text
-    }
 }

@@ -48,11 +48,7 @@ pub(super) fn build_command(
 }
 
 pub(super) fn add_single_directory_scope(command: &mut Command, path: &str) {
-    let normalized = path.trim_start_matches("./").trim_matches('/');
-    let Some((parent, _)) = normalized.rsplit_once('/') else {
-        return;
-    };
-    if !parent.is_empty() {
+    if let Some(parent) = crate::utils::sync_path(path).parent {
         command.arg("--single-directory").arg(parent);
     }
 }

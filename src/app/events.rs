@@ -93,7 +93,7 @@ fn drain_backend_events(state: &Rc<AppState>) {
                 }
                 if success {
                     show_toast(state, "认证完成");
-                    if let Some(account) = account_by_id(state, &account_id) {
+                    if let Some(account) = state.account_by_id(&account_id) {
                         start_account_identity_lookup(account, state.sender.clone());
                     }
                 } else if let Some(account) = state.selected_account() {
@@ -213,7 +213,6 @@ fn drain_backend_events(state: &Rc<AppState>) {
             BackendEvent::PreviewReconcileStarted {
                 account_id,
                 change_id,
-                scope: _,
             } => {
                 state
                     .transfers
@@ -255,35 +254,28 @@ fn drain_backend_events(state: &Rc<AppState>) {
             } => {
                 state.operation_handles.borrow_mut().remove(&account_id);
                 finish_operation(state, &account_id);
-                if outcome.auth_required {
-                    handle_auth_required(Rc::clone(state), &account_id, outcome.error);
-                    continue;
-                }
-                let status = if outcome.success
-                    || outcome.requested_stop
-                    || outcome.requires_confirmation.is_some()
-                {
-                    AccountStatus::Authenticated
-                } else {
-                    AccountStatus::Error(
-                        outcome
-                            .error
-                            .as_ref()
-                            .map(backend_error_message)
-                            .unwrap_or_else(|| "持续同步停止".to_string()),
-                    )
-                };
-                update_account_status(state, &account_id, status);
-                if let Some(kind) = outcome.requires_confirmation {
-                    if state.pending_confirmation.borrow().is_none() {
-                        handle_confirmation_required(Rc::clone(state), &account_id, kind);
+                match reduce_outcome(&outcome, "持续同步停止") {
+                    OutcomeResolution::AuthRequired(error) => {
+                        handle_auth_required(Rc::clone(state), &account_id, error);
+                        continue;
                     }
-                } else if outcome.requested_stop {
-                    show_toast(state, "持续同步已停止");
-                } else if outcome.success {
-                    show_toast(state, "持续同步已结束");
-                } else {
-                    show_toast(state, "持续同步异常停止");
+                    OutcomeResolution::Resolved {
+                        status,
+                        confirmation,
+                    } => {
+                        update_account_status(state, &account_id, status);
+                        if let Some(kind) = confirmation {
+                            if !state.pending_confirmation.get() {
+                                handle_confirmation_required(Rc::clone(state), &account_id, kind);
+                            }
+                        } else if outcome.requested_stop {
+                            show_toast(state, "持续同步已停止");
+                        } else if outcome.success {
+                            show_toast(state, "持续同步已结束");
+                        } else {
+                            show_toast(state, "持续同步异常停止");
+                        }
+                    }
                 }
             }
         }
@@ -303,18 +295,18 @@ pub(super) fn stop_sync(state: &AppState, account_id: &str, message: &str) {
     }
 }
 
-fn apply_outcome(
-    state: &Rc<AppState>,
-    account_id: &str,
-    outcome: OperationOutcome,
-    stop_message: &str,
-    success_message: &str,
-) {
-    state.operation_handles.borrow_mut().remove(account_id);
-    finish_operation(state, account_id);
+#[derive(Debug, PartialEq, Eq)]
+enum OutcomeResolution {
+    AuthRequired(Option<BackendError>),
+    Resolved {
+        status: AccountStatus,
+        confirmation: Option<ConfirmationKind>,
+    },
+}
+
+fn reduce_outcome(outcome: &OperationOutcome, default_error: &str) -> OutcomeResolution {
     if outcome.auth_required {
-        handle_auth_required(Rc::clone(state), account_id, outcome.error);
-        return;
+        return OutcomeResolution::AuthRequired(outcome.error.clone());
     }
     let status =
         if outcome.success || outcome.requested_stop || outcome.requires_confirmation.is_some() {
@@ -325,40 +317,62 @@ fn apply_outcome(
                     .error
                     .as_ref()
                     .map(backend_error_message)
-                    .unwrap_or_else(|| "操作失败".to_string()),
+                    .unwrap_or_else(|| default_error.to_string()),
             )
         };
-    update_account_status(state, account_id, status);
-    if let Some(kind) = outcome.requires_confirmation {
-        if state.pending_confirmation.borrow().is_none() {
-            handle_confirmation_required(Rc::clone(state), account_id, kind);
+    OutcomeResolution::Resolved {
+        status,
+        confirmation: outcome.requires_confirmation,
+    }
+}
+
+fn apply_outcome(
+    state: &Rc<AppState>,
+    account_id: &str,
+    outcome: OperationOutcome,
+    stop_message: &str,
+    success_message: &str,
+) {
+    state.operation_handles.borrow_mut().remove(account_id);
+    finish_operation(state, account_id);
+    match reduce_outcome(&outcome, "操作失败") {
+        OutcomeResolution::AuthRequired(error) => {
+            handle_auth_required(Rc::clone(state), account_id, error);
         }
-    } else if outcome.requested_stop {
-        show_toast(state, stop_message);
-    } else if outcome.success {
-        show_toast(state, success_message);
-    } else if let Some(account) = state.selected_account() {
-        show_toast(state, status_label(&account.status));
+        OutcomeResolution::Resolved {
+            status,
+            confirmation,
+        } => {
+            update_account_status(state, account_id, status);
+            if let Some(kind) = confirmation {
+                if !state.pending_confirmation.get() {
+                    handle_confirmation_required(Rc::clone(state), account_id, kind);
+                }
+            } else if outcome.requested_stop {
+                show_toast(state, stop_message);
+            } else if outcome.success {
+                show_toast(state, success_message);
+            } else if let Some(account) = state.selected_account() {
+                show_toast(state, status_label(&account.status));
+            }
+        }
     }
 }
 
 fn handle_confirmation_required(state: Rc<AppState>, account_id: &str, kind: ConfirmationKind) {
-    if state.pending_confirmation.borrow().is_some() {
+    if state.pending_confirmation.get() {
         return;
     }
-    state
-        .pending_confirmation
-        .borrow_mut()
-        .replace(account_id.to_string());
+    state.pending_confirmation.set(true);
     if matches!(kind, ConfirmationKind::ResyncRequired)
-        && let Some(account) = account_by_id(&state, account_id)
+        && let Some(account) = state.account_by_id(account_id)
     {
         confirm::show_resync_confirmation(state, account);
         return;
     }
 
     if matches!(kind, ConfirmationKind::BigDelete)
-        && let Some(account) = account_by_id(&state, account_id)
+        && let Some(account) = state.account_by_id(account_id)
     {
         confirm::show_big_delete_confirmation(state, account);
         return;
@@ -381,11 +395,6 @@ pub(super) fn stop_monitor(state: &AppState, account_id: &str) {
 }
 
 pub(super) fn stop_all_monitors(state: &AppState) {
-    let sync_handles: Vec<OperationHandle> =
-        state.operation_handles.borrow().values().cloned().collect();
-    for handle in sync_handles {
-        let _ = stop_operation(&handle);
-    }
     let handles: Vec<OperationHandle> =
         state.operation_handles.borrow().values().cloned().collect();
     for handle in handles {
@@ -452,16 +461,6 @@ pub(super) fn show_operation_toast(state: &AppState, account_id: &str) {
     show_toast(state, &message);
 }
 
-fn account_by_id(state: &AppState, account_id: &str) -> Option<Account> {
-    state
-        .store
-        .borrow()
-        .accounts()
-        .iter()
-        .find(|account| account.id == account_id)
-        .cloned()
-}
-
 fn update_account_identity(
     state: &AppState,
     account_id: &str,
@@ -509,5 +508,116 @@ pub(super) fn ensure_client_ready(state: &AppState) -> bool {
     } else {
         show_toast(state, &client_check_message(&check));
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::BackendError;
+
+    fn outcome(
+        success: bool,
+        requested_stop: bool,
+        auth_required: bool,
+        error: Option<BackendError>,
+        requires_confirmation: Option<ConfirmationKind>,
+    ) -> OperationOutcome {
+        OperationOutcome {
+            success,
+            requested_stop,
+            auth_required,
+            error,
+            requires_confirmation,
+        }
+    }
+
+    #[test]
+    fn reduce_auth_required_carries_error() {
+        let o = outcome(false, false, true, Some(BackendError::AuthExpired), None);
+        match reduce_outcome(&o, "默认") {
+            OutcomeResolution::AuthRequired(err) => {
+                assert_eq!(err, Some(BackendError::AuthExpired))
+            }
+            other => panic!("expected AuthRequired, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reduce_success_resolves_authenticated() {
+        let o = outcome(true, false, false, None, None);
+        match reduce_outcome(&o, "默认") {
+            OutcomeResolution::Resolved {
+                status,
+                confirmation,
+            } => {
+                assert_eq!(status, AccountStatus::Authenticated);
+                assert_eq!(confirmation, None);
+            }
+            other => panic!("expected Resolved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reduce_requested_stop_resolves_authenticated() {
+        let o = outcome(false, true, false, None, None);
+        match reduce_outcome(&o, "默认") {
+            OutcomeResolution::Resolved {
+                status,
+                confirmation,
+            } => {
+                assert_eq!(status, AccountStatus::Authenticated);
+                assert_eq!(confirmation, None);
+            }
+            other => panic!("expected Resolved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reduce_confirmation_surfaces_kind() {
+        let o = outcome(false, false, false, None, Some(ConfirmationKind::BigDelete));
+        match reduce_outcome(&o, "默认") {
+            OutcomeResolution::Resolved {
+                status,
+                confirmation,
+            } => {
+                assert_eq!(status, AccountStatus::Authenticated);
+                assert_eq!(confirmation, Some(ConfirmationKind::BigDelete));
+            }
+            other => panic!("expected Resolved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reduce_error_with_message_uses_backend_message() {
+        let o = outcome(false, false, false, Some(BackendError::Network), None);
+        match reduce_outcome(&o, "默认") {
+            OutcomeResolution::Resolved {
+                status,
+                confirmation,
+            } => {
+                assert_eq!(
+                    status,
+                    AccountStatus::Error(backend_error_message(&BackendError::Network))
+                );
+                assert_eq!(confirmation, None);
+            }
+            other => panic!("expected Resolved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reduce_error_without_message_uses_default() {
+        let o = outcome(false, false, false, None, None);
+        match reduce_outcome(&o, "操作失败") {
+            OutcomeResolution::Resolved {
+                status,
+                confirmation,
+            } => {
+                assert_eq!(status, AccountStatus::Error("操作失败".to_string()));
+                assert_eq!(confirmation, None);
+            }
+            other => panic!("expected Resolved, got {other:?}"),
+        }
     }
 }

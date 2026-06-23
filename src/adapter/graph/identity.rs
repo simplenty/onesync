@@ -1,6 +1,7 @@
-use super::preview::response_to_io;
+use super::http::response_to_io;
 use crate::event::{BackendError, BackendEvent};
 use crate::profile::Account;
+use crate::utils::unquote;
 use serde::Deserialize;
 use std::{fs, io, path::Path, sync::mpsc, thread, time::Duration};
 
@@ -132,10 +133,6 @@ fn non_empty(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
-}
-
-fn unquote(value: &str) -> &str {
-    value.trim().trim_matches('"').trim_matches('\'').trim()
 }
 
 #[cfg(test)]

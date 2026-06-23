@@ -62,12 +62,12 @@ OneSync 的 UI 应当像一个可靠的系统工具：克制、直接、可预�
 
 ## 模块职责
 
-- `profile`：定义和持久化 OneDrive profile，包括 profile 模型、状态、配置文件编辑、GUI 设置、认证文件路径和同步目录。
+- `profile`：定义和持久化 OneDrive profile，包括 profile 模型、状态、配置文件编辑、GUI 设置、认证文件路径和同步目录。`profile::edit::save_profile_edit` 是可独立测试的配置写入用例，从 GTK 编辑对话框中抽出 OneDriveConfig 读取/应用/备份写入和选择性同步列表写入。
 - `operation`：定义 OneSync 的运行态语言，包括 `OperationKind`、`OperationPhase`、`AccountOperation`、控件状态派生和 operation registry。UI 与后端都使用这套类型表达“某个 profile 正在执行什么”。
 - `event`：定义后台到 UI 的事实流和事件 payload。`FileChange`、`PreviewChange` 等文件变化数据属于 event payload，不是独立顶层架构概念。
-- `adapter`：外部系统 adapter。`adapter::onedrive` 负责版本检测、认证、同步、预览、监控、reconcile、进程停止和 onedrive 输出解析；`adapter::graph` 负责账号身份查询和应用单项预览变更。adapter 只通过 `BackendEvent` 向 UI 报告事实。
-- `app`：GTK/libadwaita 应用层，负责把用户动作转换为 operation 请求，把 backend event 归约为 `AppState`，并从状态渲染 UI；GTK widget 只能在主线程操作。
-- `utils`：集中处理配置根目录、home 目录展开和时间戳，避免 profile 与设置模块重复实现路径逻辑。
+- `adapter`：外部系统 adapter。`adapter::onedrive` 负责版本检测、认证、同步、预览、监控、reconcile、进程停止和 onedrive 输出解析；`adapter::graph` 负责账号身份查询和应用单项预览变更，`adapter::graph::http` 提供 `response_to_io` 共享转换。adapter 只通过 `BackendEvent` 向 UI 报告事实。
+- `app`：GTK/libadwaita 应用层，负责把用户动作转换为 operation 请求，把 backend event 归约为 `AppState`，并从状态渲染 UI；GTK widget 只能在主线程操作。`app::events::reduce_outcome` 是纯函数，把 `OperationOutcome` 归约为 `OutcomeResolution`（含 `AccountStatus` 与可选 confirmation），不含 GTK，可独立测试。
+- `utils`：集中处理配置根目录、home 目录展开、时间戳和路径拆分（`sync_path` 把相对路径拆为父目录与名称，供 single-directory scope 与 preview reconcile 共用），避免 profile 与 adapter 模块重复实现路径逻辑。
 
 ## UI 组件
 

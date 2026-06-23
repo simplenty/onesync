@@ -404,7 +404,6 @@ mod tests {
             .expect("dry-run download should become a preview change");
 
         assert_eq!(change.intent, PreviewIntent::RemoteChangeToLocal);
-        assert!(!change.needs_confirmation());
     }
 
     #[test]
@@ -414,7 +413,6 @@ mod tests {
                 .expect("remote delete preview should be parsed");
 
         assert_eq!(change.intent, PreviewIntent::LocalDeleteToRemote);
-        assert!(!change.needs_confirmation());
     }
 
     #[test]

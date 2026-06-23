@@ -145,12 +145,7 @@ pub(in crate::app) fn refresh_content(state: &AppState) {
             (OperationKind::Preview, OperationPhase::Stopping) => CommandRuntime::StoppingPreview,
             (OperationKind::Monitor, OperationPhase::Running) => CommandRuntime::RunningMonitor,
             (OperationKind::Monitor, OperationPhase::Stopping) => CommandRuntime::StoppingMonitor,
-            (
-                OperationKind::Authentication
-                | OperationKind::ApplyPreviewChange
-                | OperationKind::Reconcile,
-                _,
-            ) => CommandRuntime::Blocked,
+            (OperationKind::Authentication, _) => CommandRuntime::Blocked,
         },
         None => CommandRuntime::Idle,
     };
@@ -182,7 +177,9 @@ pub(in crate::app) fn refresh_content(state: &AppState) {
     state.mode_dropdown.set_visible(!is_unauth);
     state.edit_button.set_sensitive(true);
     state.open_sync_dir_button.set_sensitive(true);
-    state.resync_button.set_sensitive(!is_unauth && client_ready && runtime == CommandRuntime::Idle);
+    state
+        .resync_button
+        .set_sensitive(!is_unauth && client_ready && runtime == CommandRuntime::Idle);
 }
 
 pub(in crate::app) fn show_toast(state: &AppState, message: &str) {

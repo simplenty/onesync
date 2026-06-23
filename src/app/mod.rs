@@ -113,7 +113,7 @@ fn build_ui(app: &adw::Application) {
         operations: RefCell::new(OperationRegistry::default()),
         previews: RefCell::new(HashMap::new()),
         applying_preview_changes: RefCell::new(std::collections::HashSet::new()),
-        pending_confirmation: RefCell::new(None),
+        pending_confirmation: Cell::new(false),
         tray_handle: RefCell::new(None),
         tray_snapshot: RefCell::new(None),
         toast_overlay: toast_overlay.clone(),
@@ -152,10 +152,8 @@ fn build_ui(app: &adw::Application) {
 
     // Push initial snapshot
     if let Some(ref handle) = *state.tray_handle.borrow() {
-        let snap = tray::build_snapshot(
-            &state.store.borrow().accounts(),
-            &state.operations.borrow(),
-        );
+        let snap =
+            tray::build_snapshot(state.store.borrow().accounts(), &state.operations.borrow());
         tray::push_snapshot(handle, &tray_snapshot_arc, snap);
     }
 
@@ -182,8 +180,6 @@ fn build_ui(app: &adw::Application) {
 }
 
 fn connect_actions(state: Rc<AppState>) {
-    state.settings_button.connect_clicked(|_| {});
-
     let mode_state = Rc::clone(&state);
     state
         .mode_dropdown
@@ -303,7 +299,6 @@ pub(in crate::app) fn close_auth_panel(state: &AppState, account_id: &str) {
     }
 }
 
-
 pub(in crate::app) fn update_account_status(
     state: &Rc<AppState>,
     account_id: &str,
@@ -317,13 +312,13 @@ pub(in crate::app) fn update_account_status(
     push_tray_snapshot(state);
 }
 
+// ponytail: nested ifs kept — collapsing to a tuple `if let` would move out of the RefCell Refs (E0507)
+#[allow(clippy::collapsible_if)]
 fn push_tray_snapshot(state: &AppState) {
     if let Some(ref handle) = *state.tray_handle.borrow() {
         if let Some(ref arc) = *state.tray_snapshot.borrow() {
-            let snap = tray::build_snapshot(
-                &state.store.borrow().accounts(),
-                &state.operations.borrow(),
-            );
+            let snap =
+                tray::build_snapshot(state.store.borrow().accounts(), &state.operations.borrow());
             tray::push_snapshot(handle, arc, snap);
         }
     }
@@ -354,12 +349,8 @@ fn start_missing_identity_lookups(state: &AppState) {
 }
 
 fn needs_identity_lookup(account: &Account) -> bool {
-    let name = account.name.trim();
     account.email.trim().is_empty()
-        || name.is_empty()
-        || name == "OneDrive"
-        || name.starts_with("OneDrive ")
-        || name == account.email
+        || crate::profile::is_default_profile_name(&account.name, &account.email)
 }
 
 pub(in crate::app) fn onedrive_command(state: &AppState) -> String {

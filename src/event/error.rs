@@ -52,6 +52,9 @@ pub enum BackendError {
     // account store
     DuplicateAccountName,
     DuplicateSyncDir,
+    /// Creating the profile config or sync directory failed on disk.
+    /// Carries the raw OS error text.
+    ProfileCreateFailed(String),
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use crate::app::{
-    change_kind_icon, file_display_state, preview_change_description, preview_change_icon,
-    preview_intent_detail, preview_intent_label,
+    change_kind_icon, file_display_state, preview_change_description, preview_intent_detail,
+    preview_intent_label,
 };
 use crate::event::payload::{FileChange, PreviewChange, PreviewState};
 use gtk::{Align, prelude::*};
@@ -44,12 +44,14 @@ struct PreviewRow {
     state: Cell<PreviewState>,
 }
 
+type PreviewCallback = Rc<dyn Fn(String, String)>;
+
 pub(in crate::app) struct TransferList {
     list: gtk::ListBox,
     rows: RefCell<HashMap<String, ListRow>>,
     next_order: Cell<u64>,
-    accept_preview: RefCell<Option<Rc<dyn Fn(String, String)>>>,
-    dismiss_preview: RefCell<Option<Rc<dyn Fn(String, String)>>>,
+    accept_preview: RefCell<Option<PreviewCallback>>,
+    dismiss_preview: RefCell<Option<PreviewCallback>>,
 }
 
 impl TransferList {
@@ -74,7 +76,7 @@ impl TransferList {
     pub(in crate::app) fn upsert(&self, file: FileChange) {
         let completed = file.is_complete();
         if let Some(ListRow::Live(row)) = self.rows.borrow().get(&file.name).cloned() {
-            let progress = if file.is_failed() {
+            let progress = if file.failed {
                 file.progress
             } else if completed {
                 1.0
@@ -345,7 +347,7 @@ fn build_preview_row(change: PreviewChange) -> (gtk::ListBoxRow, PreviewRow) {
         .margin_end(12)
         .build();
 
-    let icon = gtk::Image::from_icon_name(preview_change_icon(&change));
+    let icon = gtk::Image::from_icon_name(change_kind_icon(change.kind));
     icon.set_valign(Align::Center);
 
     let text_box = gtk::Box::builder()
@@ -360,19 +362,11 @@ fn build_preview_row(change: PreviewChange) -> (gtk::ListBoxRow, PreviewRow) {
         .halign(Align::Start)
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .build();
-    let state_text = if change.needs_confirmation() {
-        format!(
-            "{} · {} · 需要确认",
-            preview_intent_label(change.intent),
-            preview_change_description(&change),
-        )
-    } else {
-        format!(
-            "{} · {}",
-            preview_intent_label(change.intent),
-            preview_change_description(&change),
-        )
-    };
+    let state_text = format!(
+        "{} · {}",
+        preview_intent_label(change.intent),
+        preview_change_description(&change),
+    );
     let state = gtk::Label::builder()
         .label(state_text)
         .halign(Align::Start)

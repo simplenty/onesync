@@ -66,7 +66,10 @@ pub(super) struct OneSyncTray {
 
 impl OneSyncTray {
     fn snap(&self) -> TraySnapshot {
-        self.snapshot.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.snapshot
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 
@@ -109,7 +112,9 @@ impl ksni::Tray for OneSyncTray {
         let sender = self.sender.clone();
         items.push(ksni::MenuItem::Standard(ksni::menu::StandardItem {
             label: "打开 OneSync".into(),
-            activate: Box::new(move |_| { let _ = sender.send(TrayAction::Present); }),
+            activate: Box::new(move |_| {
+                let _ = sender.send(TrayAction::Present);
+            }),
             ..Default::default()
         }));
 
@@ -125,7 +130,9 @@ impl ksni::Tray for OneSyncTray {
         let sender = self.sender.clone();
         items.push(ksni::MenuItem::Standard(ksni::menu::StandardItem {
             label: "退出 OneSync".into(),
-            activate: Box::new(move |_| { let _ = sender.send(TrayAction::Quit); }),
+            activate: Box::new(move |_| {
+                let _ = sender.send(TrayAction::Quit);
+            }),
             ..Default::default()
         }));
 
@@ -133,18 +140,37 @@ impl ksni::Tray for OneSyncTray {
     }
 }
 
-fn build_account_submenu(acct: &TrayAccount, sender: &mpsc::Sender<TrayAction>) -> ksni::MenuItem<OneSyncTray> {
+fn mk_action(
+    sender: &mpsc::Sender<TrayAction>,
+    label: &str,
+    enabled: bool,
+    action: TrayAction,
+) -> ksni::MenuItem<OneSyncTray> {
+    let sender = sender.clone();
+    ksni::MenuItem::Standard(ksni::menu::StandardItem {
+        label: label.into(),
+        enabled,
+        activate: Box::new(move |_| {
+            let _ = sender.send(action.clone());
+        }),
+        ..Default::default()
+    })
+}
+
+fn build_account_submenu(
+    acct: &TrayAccount,
+    sender: &mpsc::Sender<TrayAction>,
+) -> ksni::MenuItem<OneSyncTray> {
     let mut sub: Vec<ksni::MenuItem<OneSyncTray>> = Vec::new();
 
     match &acct.status {
         TrayAccountStatus::NeedsAuth | TrayAccountStatus::Error(_) => {
-            let sender = sender.clone();
-            let id = acct.id.clone();
-            sub.push(ksni::MenuItem::Standard(ksni::menu::StandardItem {
-                label: "重新认证".into(),
-                activate: Box::new(move |_| { let _ = sender.send(TrayAction::Auth(id.clone())); }),
-                ..Default::default()
-            }));
+            sub.push(mk_action(
+                sender,
+                "重新认证",
+                true,
+                TrayAction::Auth(acct.id.clone()),
+            ));
         }
         TrayAccountStatus::Authenticated => {
             sub.push(ksni::MenuItem::Standard(ksni::menu::StandardItem {
@@ -153,62 +179,70 @@ fn build_account_submenu(acct: &TrayAccount, sender: &mpsc::Sender<TrayAction>) 
                 ..Default::default()
             }));
 
-            let is_sync = acct.operation.as_ref().is_some_and(|op| op.kind == OperationKind::OneTimeSync);
-            let is_monitor = acct.operation.as_ref().is_some_and(|op| op.kind == OperationKind::Monitor);
-            let stopping = acct.operation.as_ref().is_some_and(|op| op.phase == OperationPhase::Stopping);
+            let is_sync = acct
+                .operation
+                .as_ref()
+                .is_some_and(|op| op.kind == OperationKind::OneTimeSync);
+            let is_monitor = acct
+                .operation
+                .as_ref()
+                .is_some_and(|op| op.kind == OperationKind::Monitor);
+            let stopping = acct
+                .operation
+                .as_ref()
+                .is_some_and(|op| op.phase == OperationPhase::Stopping);
             let has_op = acct.operation.is_some();
 
             // 手动同步 row — in-place "停止" when OneTimeSync running
-            {
-                let s = sender.clone();
-                let id = acct.id.clone();
-                match (is_sync, stopping) {
-                    (true, true) => sub.push(ksni::MenuItem::Standard(ksni::menu::StandardItem {
-                        label: "正在停止…".into(), enabled: false, ..Default::default()
-                    })),
-                    (true, false) => sub.push(ksni::MenuItem::Standard(ksni::menu::StandardItem {
-                        label: "停止".into(), enabled: true,
-                        activate: Box::new(move |_| { let _ = s.send(TrayAction::Stop(id.clone())); }),
-                        ..Default::default()
-                    })),
-                    (false, _) => sub.push(ksni::MenuItem::Standard(ksni::menu::StandardItem {
-                        label: "手动同步".into(), enabled: !has_op,
-                        activate: Box::new(move |_| { let _ = s.send(TrayAction::Sync(id.clone())); }),
-                        ..Default::default()
-                    })),
-                }
+            match (is_sync, stopping) {
+                (true, true) => sub.push(ksni::MenuItem::Standard(ksni::menu::StandardItem {
+                    label: "正在停止…".into(),
+                    enabled: false,
+                    ..Default::default()
+                })),
+                (true, false) => sub.push(mk_action(
+                    sender,
+                    "停止",
+                    true,
+                    TrayAction::Stop(acct.id.clone()),
+                )),
+                (false, _) => sub.push(mk_action(
+                    sender,
+                    "手动同步",
+                    !has_op,
+                    TrayAction::Sync(acct.id.clone()),
+                )),
             }
 
             // 自动同步 row — in-place "停止" when Monitor running
-            {
-                let s = sender.clone();
-                let id = acct.id.clone();
-                match (is_monitor, stopping) {
-                    (true, true) => sub.push(ksni::MenuItem::Standard(ksni::menu::StandardItem {
-                        label: "正在停止…".into(), enabled: false, ..Default::default()
-                    })),
-                    (true, false) => sub.push(ksni::MenuItem::Standard(ksni::menu::StandardItem {
-                        label: "停止".into(), enabled: true,
-                        activate: Box::new(move |_| { let _ = s.send(TrayAction::Stop(id.clone())); }),
-                        ..Default::default()
-                    })),
-                    (false, _) => sub.push(ksni::MenuItem::Standard(ksni::menu::StandardItem {
-                        label: "自动同步".into(), enabled: !has_op,
-                        activate: Box::new(move |_| { let _ = s.send(TrayAction::Monitor(id.clone())); }),
-                        ..Default::default()
-                    })),
-                }
+            match (is_monitor, stopping) {
+                (true, true) => sub.push(ksni::MenuItem::Standard(ksni::menu::StandardItem {
+                    label: "正在停止…".into(),
+                    enabled: false,
+                    ..Default::default()
+                })),
+                (true, false) => sub.push(mk_action(
+                    sender,
+                    "停止",
+                    true,
+                    TrayAction::Stop(acct.id.clone()),
+                )),
+                (false, _) => sub.push(mk_action(
+                    sender,
+                    "自动同步",
+                    !has_op,
+                    TrayAction::Monitor(acct.id.clone()),
+                )),
             }
         }
     }
 
-    let sender = sender.clone();
-    let id = acct.id.clone();
-    sub.push(ksni::MenuItem::Standard(ksni::menu::StandardItem {
-        label: "打开同步目录".into(),
-        activate: Box::new(move |_| { let _ = sender.send(TrayAction::OpenDir(id.clone())); }),
-        ..Default::default()
-    }));
+    sub.push(mk_action(
+        sender,
+        "打开同步目录",
+        true,
+        TrayAction::OpenDir(acct.id.clone()),
+    ));
 
     ksni::MenuItem::SubMenu(ksni::menu::SubMenu {
         label: acct.name.clone(),
@@ -225,33 +259,47 @@ pub(super) fn build_snapshot(
     ops: &crate::operation::OperationRegistry,
 ) -> TraySnapshot {
     TraySnapshot {
-        accounts: accounts.iter().map(|a| TrayAccount {
-            id: a.id.clone(),
-            name: a.name.clone(),
-            status: match &a.status {
-                AccountStatus::NeedsAuth => TrayAccountStatus::NeedsAuth,
-                AccountStatus::Authenticated => TrayAccountStatus::Authenticated,
-                AccountStatus::Error(msg) => TrayAccountStatus::Error(msg.clone()),
-            },
-            operation: ops.get(&a.id).map(|op| TrayOperation {
-                kind: op.kind,
-                phase: op.phase,
-            }),
-        }).collect(),
+        accounts: accounts
+            .iter()
+            .map(|a| TrayAccount {
+                id: a.id.clone(),
+                name: a.name.clone(),
+                status: match &a.status {
+                    AccountStatus::NeedsAuth => TrayAccountStatus::NeedsAuth,
+                    AccountStatus::Authenticated => TrayAccountStatus::Authenticated,
+                    AccountStatus::Error(msg) => TrayAccountStatus::Error(msg.clone()),
+                },
+                operation: ops.get(&a.id).map(|op| TrayOperation {
+                    kind: op.kind,
+                    phase: op.phase,
+                }),
+            })
+            .collect(),
     }
 }
 
 /// Spawn tray service. Returns handle + shared snapshot Arc + the receiver end of the action channel.
-pub(super) fn init() -> (AppTrayHandle, Arc<Mutex<TraySnapshot>>, mpsc::Receiver<TrayAction>) {
+pub(super) fn init() -> (
+    AppTrayHandle,
+    Arc<Mutex<TraySnapshot>>,
+    mpsc::Receiver<TrayAction>,
+) {
     let (sender, receiver) = mpsc::channel();
     let snapshot = Arc::new(Mutex::new(TraySnapshot { accounts: vec![] }));
-    let tray = OneSyncTray { snapshot: snapshot.clone(), sender };
+    let tray = OneSyncTray {
+        snapshot: snapshot.clone(),
+        sender,
+    };
     let handle = ksni::blocking::TrayMethods::spawn(tray).expect("failed to spawn ksni tray");
     (handle, snapshot, receiver)
 }
 
 /// Push a fresh snapshot and trigger menu rebuild.
-pub(super) fn push_snapshot(handle: &AppTrayHandle, arc: &Arc<Mutex<TraySnapshot>>, snap: TraySnapshot) {
+pub(super) fn push_snapshot(
+    handle: &AppTrayHandle,
+    arc: &Arc<Mutex<TraySnapshot>>,
+    snap: TraySnapshot,
+) {
     *arc.lock().unwrap_or_else(|e| e.into_inner()) = snap;
     handle.update(|_: &mut OneSyncTray| { /* menu rebuilds on next query — snapshot is shared */ });
 }
@@ -271,16 +319,12 @@ pub(super) fn handle_action(action: TrayAction, state: &std::rc::Rc<super::state
             }
         }
         TrayAction::Sync(id) => {
-            if let Some(acct) = state.store.borrow().accounts().iter()
-                .find(|a| a.id == id).cloned()
-            {
+            if let Some(acct) = state.account_by_id(&id) {
                 super::actions::start_one_time_sync_for_account(std::rc::Rc::clone(state), acct);
             }
         }
         TrayAction::Monitor(id) => {
-            if let Some(acct) = state.store.borrow().accounts().iter()
-                .find(|a| a.id == id).cloned()
-            {
+            if let Some(acct) = state.account_by_id(&id) {
                 super::actions::start_monitor_for_account(std::rc::Rc::clone(state), acct);
             }
         }
@@ -295,16 +339,12 @@ pub(super) fn handle_action(action: TrayAction, state: &std::rc::Rc<super::state
             }
         }
         TrayAction::Auth(id) => {
-            if let Some(acct) = state.store.borrow().accounts().iter()
-                .find(|a| a.id == id).cloned()
-            {
+            if let Some(acct) = state.account_by_id(&id) {
                 super::dialogs::auth::show_auth_dialog(std::rc::Rc::clone(state), acct);
             }
         }
         TrayAction::OpenDir(id) => {
-            if let Some(acct) = state.store.borrow().accounts().iter()
-                .find(|a| a.id == id).cloned()
-            {
+            if let Some(acct) = state.account_by_id(&id) {
                 super::actions::open_sync_dir_for_account(state, &acct);
             }
         }

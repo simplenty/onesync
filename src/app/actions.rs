@@ -12,7 +12,7 @@ use super::{
 use crate::{
     adapter::{
         graph::start_apply_preview_change,
-        onedrive::{start_forced_sync, start_monitor, start_preview, start_resync, start_sync},
+        onedrive::{start_monitor, start_preview, start_sync},
     },
     operation::OperationKind,
     profile::{Account, AccountStatus, SyncMode, is_authenticated, load_profile_sync_mode},
@@ -22,7 +22,7 @@ use gtk::gio;
 use std::rc::Rc;
 
 pub(in crate::app) fn start_one_time_sync_for_account(state: Rc<AppState>, account: Account) {
-    start_manual_one_time_sync_for_account(state, account);
+    start_one_time_sync(state, account, false, false);
 }
 
 pub(in crate::app) fn load_sync_mode_for_selected_profile(state: &AppState) {
@@ -43,13 +43,6 @@ pub(in crate::app) fn load_sync_mode_for_selected_profile(state: &AppState) {
     state.updating_sync_mode_dropdown.set(false);
 }
 
-pub(in crate::app) fn start_manual_one_time_sync_for_account(
-    state: Rc<AppState>,
-    account: Account,
-) {
-    start_one_time_sync(state, account, SyncStartMode::Normal);
-}
-
 pub(in crate::app) fn start_or_stop_manual_one_time_sync_for_account(
     state: Rc<AppState>,
     account: Account,
@@ -57,7 +50,7 @@ pub(in crate::app) fn start_or_stop_manual_one_time_sync_for_account(
     if is_sync_running(&state, &account.id) {
         stop_sync(&state, &account.id, "停止");
     } else {
-        start_manual_one_time_sync_for_account(state, account);
+        start_one_time_sync(state, account, false, false);
     }
 }
 
@@ -69,25 +62,12 @@ pub(in crate::app) fn start_or_stop_auto_sync_for_account(state: Rc<AppState>, a
     }
 }
 
-pub(in crate::app) fn start_forced_one_time_sync_for_account(
+pub(in crate::app) fn start_one_time_sync(
     state: Rc<AppState>,
     account: Account,
+    force: bool,
+    resync: bool,
 ) {
-    start_one_time_sync(state, account, SyncStartMode::Force);
-}
-
-pub(in crate::app) fn start_resync_for_account(state: Rc<AppState>, account: Account) {
-    start_one_time_sync(state, account, SyncStartMode::Resync);
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SyncStartMode {
-    Normal,
-    Force,
-    Resync,
-}
-
-fn start_one_time_sync(state: Rc<AppState>, account: Account, mode: SyncStartMode) {
     if is_sync_running(&state, &account.id) {
         show_toast(&state, "同步正在运行，请等待完成");
         return;
@@ -111,11 +91,7 @@ fn start_one_time_sync(state: Rc<AppState>, account: Account, mode: SyncStartMod
     let account_id = account.id.clone();
     let command = onedrive_command(&state);
     let sender = state.sender.clone();
-    let start_result = match mode {
-        SyncStartMode::Normal => start_sync(account, command, sender),
-        SyncStartMode::Force => start_forced_sync(account, command, sender),
-        SyncStartMode::Resync => start_resync(account, command, sender),
-    };
+    let start_result = start_sync(account, command, sender, force, resync);
     match start_result {
         Ok(handle) => {
             state
@@ -207,7 +183,7 @@ pub(in crate::app) fn connect_preview_row_actions(state: Rc<AppState>) {
 }
 
 fn apply_preview_change(state: Rc<AppState>, account_id: &str, change_id: &str) {
-    let Some(account) = account_by_id(&state, account_id) else {
+    let Some(account) = state.account_by_id(account_id) else {
         show_toast(&state, "该账号已不存在");
         return;
     };
@@ -241,16 +217,6 @@ fn apply_preview_change(state: Rc<AppState>, account_id: &str, change_id: &str) 
         onedrive_command(&state),
         state.sender.clone(),
     );
-}
-
-fn account_by_id(state: &AppState, account_id: &str) -> Option<Account> {
-    state
-        .store
-        .borrow()
-        .accounts()
-        .iter()
-        .find(|account| account.id == account_id)
-        .cloned()
 }
 
 pub(in crate::app) fn start_monitor_for_account(state: Rc<AppState>, account: Account) {

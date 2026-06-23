@@ -1,3 +1,4 @@
+use super::http::response_to_io;
 use super::identity::graph_access_token;
 use crate::event::{BackendError, BackendEvent};
 use crate::{
@@ -5,7 +6,7 @@ use crate::{
     profile::Account,
     utils::expand_home,
 };
-use reqwest::blocking::{Client, Response};
+use reqwest::blocking::Client;
 use serde::Deserialize;
 use std::{
     fs,
@@ -87,11 +88,9 @@ fn finish_graph_apply_with_reconcile(
     binary: String,
     sender: &mpsc::Sender<BackendEvent>,
 ) -> io::Result<()> {
-    let scope = reconcile_scope_label(&change.path);
     let _ = sender.send(BackendEvent::PreviewReconcileStarted {
         account_id: account.id.clone(),
         change_id: change.id.clone(),
-        scope: scope.clone(),
     });
 
     let reconcile =
@@ -113,13 +112,6 @@ fn finish_graph_apply_with_reconcile(
     });
 
     reconcile.map(|_| ())
-}
-
-fn reconcile_scope_label(path: &str) -> String {
-    path.trim_start_matches("./")
-        .trim_matches('/')
-        .rsplit_once('/')
-        .map_or(".".to_string(), |(parent, _)| parent.to_string())
 }
 
 fn upload_local_file(
@@ -346,11 +338,10 @@ fn move_remote_item(client: &Client, token: &str, change: &PreviewChange) -> io:
         )
     })?;
     let source_item = get_drive_item(client, token, source)?;
-    let (target_parent, target_name) = split_parent_and_name(&change.path);
-    let parent_item = if target_parent.is_empty() {
-        get_drive_item(client, token, "")?
-    } else {
-        get_drive_item(client, token, &target_parent)?
+    let target = crate::utils::sync_path(&change.path);
+    let parent_item = match target.parent {
+        Some(parent) => get_drive_item(client, token, parent)?,
+        None => get_drive_item(client, token, "")?,
     };
 
     response_to_io(
@@ -359,7 +350,7 @@ fn move_remote_item(client: &Client, token: &str, change: &PreviewChange) -> io:
             .bearer_auth(token)
             .json(&serde_json::json!({
                 "parentReference": { "id": parent_item.id },
-                "name": target_name,
+                "name": target.name,
             }))
             .send(),
     )?;
@@ -367,10 +358,9 @@ fn move_remote_item(client: &Client, token: &str, change: &PreviewChange) -> io:
 }
 
 fn ensure_remote_parent_dirs(client: &Client, token: &str, path: &str) -> io::Result<()> {
-    let (parent, _) = split_parent_and_name(path);
-    if parent.is_empty() {
+    let Some(parent) = crate::utils::sync_path(path).parent else {
         return Ok(());
-    }
+    };
 
     let mut current = String::new();
     for segment in parent.split('/').filter(|segment| !segment.is_empty()) {
@@ -388,12 +378,13 @@ fn ensure_remote_parent_dirs(client: &Client, token: &str, path: &str) -> io::Re
 }
 
 fn create_remote_folder(client: &Client, token: &str, path: &str) -> io::Result<()> {
-    let (parent, name) = split_parent_and_name(path);
-    let url = if parent.is_empty() {
-        format!("{GRAPH_ROOT}/me/drive/root/children")
-    } else {
-        let parent_item = get_drive_item(client, token, &parent)?;
-        format!("{GRAPH_ROOT}/me/drive/items/{}/children", parent_item.id)
+    let folder = crate::utils::sync_path(path);
+    let url = match folder.parent {
+        Some(parent) => {
+            let parent_item = get_drive_item(client, token, parent)?;
+            format!("{GRAPH_ROOT}/me/drive/items/{}/children", parent_item.id)
+        }
+        None => format!("{GRAPH_ROOT}/me/drive/root/children"),
     };
 
     response_to_io(
@@ -401,7 +392,7 @@ fn create_remote_folder(client: &Client, token: &str, path: &str) -> io::Result<
             .post(url)
             .bearer_auth(token)
             .json(&serde_json::json!({
-                "name": name,
+                "name": folder.name,
                 "folder": {},
                 "@microsoft.graph.conflictBehavior": "fail",
             }))
@@ -424,24 +415,6 @@ fn get_drive_item(client: &Client, token: &str, path: &str) -> io::Result<DriveI
 fn local_path(account: &Account, path: &str) -> PathBuf {
     expand_home(&account.sync_dir).join(path.trim_start_matches("./"))
 }
-pub(crate) fn response_to_io(result: Result<Response, reqwest::Error>) -> io::Result<Response> {
-    let response = result.map_err(io::Error::other)?;
-    if response.status().is_success() {
-        return Ok(response);
-    }
-    let status = response.status();
-    let url = response.url().to_string();
-    let body = response.text().unwrap_or_default();
-    let detail = if body.trim().is_empty() {
-        format!("{status} requesting: {url}")
-    } else {
-        format!(
-            "{status} requesting: {url}
-Response: {body}"
-        )
-    };
-    Err(io::Error::other(detail))
-}
 
 fn graph_path(path: &str) -> String {
     path.trim_start_matches("./")
@@ -463,87 +436,12 @@ fn percent_encode_segment(segment: &str) -> String {
     encoded
 }
 
-fn split_parent_and_name(path: &str) -> (String, String) {
-    let trimmed = path.trim_start_matches("./").trim_matches('/');
-    match trimmed.rsplit_once('/') {
-        Some((parent, name)) => (parent.to_string(), name.to_string()),
-        None => (String::new(), trimmed.to_string()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        event::payload::{ChangeDirection, ChangeKind, PreviewIntent, PreviewState},
-        profile::{Account, AccountStatus},
-    };
-    use std::{fs, io::Cursor, sync::mpsc};
-
-    #[cfg(unix)]
-    fn fake_onedrive_binary(
-        output: &str,
-        exit_code: i32,
-    ) -> (std::path::PathBuf, std::path::PathBuf) {
-        use std::{
-            env,
-            os::unix::fs::PermissionsExt,
-            time::{SystemTime, UNIX_EPOCH},
-        };
-
-        let root = env::temp_dir().join(format!(
-            "onesync-graph-fake-onedrive-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        let args_file = root.join("args");
-        let binary = root.join("fake-onedrive");
-        fs::write(
-            &binary,
-            format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\nprintf '%s' '{}'\nexit {}\n",
-                args_file.display(),
-                output.replace('\'', "'\\''"),
-                exit_code
-            ),
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&binary).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&binary, permissions).unwrap();
-        (binary, args_file)
-    }
-
-    #[cfg(unix)]
-    fn test_account() -> Account {
-        use std::{
-            env,
-            time::{SystemTime, UNIX_EPOCH},
-        };
-
-        let root = env::temp_dir().join(format!(
-            "onesync-graph-account-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let config_dir = root.join("profile");
-        fs::create_dir_all(&config_dir).unwrap();
-        fs::write(config_dir.join("config"), "sync_dir = \"~/OneDrive\"\n").unwrap();
-
-        Account {
-            id: "graph-account".to_string(),
-            name: "Graph Account".to_string(),
-            email: String::new(),
-            config_dir: config_dir.to_string_lossy().to_string(),
-            sync_dir: "~/OneDrive".to_string(),
-            status: AccountStatus::Authenticated,
-        }
-    }
+    use crate::adapter::test_support::{fake_onedrive_binary, temp_account};
+    use crate::event::payload::{ChangeDirection, ChangeKind, PreviewIntent, PreviewState};
+    use std::{io::Cursor, sync::mpsc};
 
     fn preview_change(path: &str, apply: PreviewAction) -> PreviewChange {
         PreviewChange {
@@ -561,18 +459,6 @@ mod tests {
     #[test]
     fn graph_path_encodes_spaces_and_hashes_but_keeps_slashes() {
         assert_eq!(graph_path("Folder A/a#b.txt"), "Folder%20A/a%23b.txt");
-    }
-
-    #[test]
-    fn parent_path_and_file_name_split_nested_path() {
-        assert_eq!(
-            split_parent_and_name("docs/archive/a.txt"),
-            ("docs/archive".to_string(), "a.txt".to_string())
-        );
-        assert_eq!(
-            split_parent_and_name("a.txt"),
-            (String::new(), "a.txt".to_string())
-        );
     }
 
     #[test]
@@ -615,7 +501,7 @@ mod tests {
     #[test]
     fn successful_graph_apply_emits_reconcile_events() {
         let (sender, receiver) = mpsc::channel();
-        let account = test_account();
+        let account = temp_account("graph");
         let (binary, _output_path) = fake_onedrive_binary(
             "Sync with Microsoft OneDrive is complete\nThe directory is in sync\n",
             0,
@@ -633,8 +519,8 @@ mod tests {
         let events: Vec<BackendEvent> = receiver.try_iter().collect();
         assert!(events.iter().any(|event| matches!(
             event,
-            BackendEvent::PreviewReconcileStarted { change_id, scope, .. }
-                if change_id == "upload-new:docs/a.txt" && scope == "docs"
+            BackendEvent::PreviewReconcileStarted { change_id, .. }
+                if change_id == "upload-new:docs/a.txt"
         )));
         assert!(events.iter().any(|event| matches!(
             event,

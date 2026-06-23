@@ -11,8 +11,6 @@ pub enum SyncMode {
     Manual,
 }
 
-impl SyncMode {}
-
 pub fn load_onedrive_command() -> io::Result<String> {
     let value = load_settings_value()?;
     Ok(value

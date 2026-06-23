@@ -73,7 +73,6 @@ pub enum BackendEvent {
     PreviewReconcileStarted {
         account_id: String,
         change_id: String,
-        scope: String,
     },
     PreviewReconcileFinished {
         account_id: String,
@@ -98,5 +97,3 @@ pub enum ConfirmationKind {
     DownloadOnlyCleanup,
     UploadOnlyNoRemoteDelete,
 }
-
-impl ConfirmationKind {}

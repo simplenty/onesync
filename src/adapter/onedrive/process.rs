@@ -175,28 +175,105 @@ pub fn start_authentication(
     })
 }
 
-pub fn start_sync(
-    account: Account,
-    binary: String,
-    sender: mpsc::Sender<BackendEvent>,
-) -> io::Result<SyncHandle> {
-    start_sync_with_options(account, binary, sender, false, false)
+struct StreamedChild {
+    child: Arc<Mutex<Child>>,
+    stop_requested: Arc<AtomicBool>,
+    output: Arc<Mutex<String>>,
 }
 
-pub fn start_forced_sync(
-    account: Account,
+fn spawn_streamed_child(
+    account: &Account,
     binary: String,
-    sender: mpsc::Sender<BackendEvent>,
-) -> io::Result<SyncHandle> {
-    start_sync_with_options(account, binary, sender, true, false)
+    kind: OneDriveCommandKind,
+    output_mode: OutputMode,
+    sender: &mpsc::Sender<BackendEvent>,
+) -> io::Result<StreamedChild> {
+    ensure_transfer_metrics_enabled(&account.config_dir)?;
+
+    let mut child = build_command(binary, account, kind)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let output = attach_readers(&account.id, &mut child, sender, output_mode);
+    let child = Arc::new(Mutex::new(child));
+    let stop_requested = Arc::new(AtomicBool::new(false));
+    Ok(StreamedChild {
+        child,
+        stop_requested,
+        output,
+    })
 }
 
-pub fn start_resync(
-    account: Account,
-    binary: String,
+#[derive(Clone, Copy)]
+enum WaiterKind {
+    Preview,
+    Sync,
+}
+
+impl WaiterKind {
+    fn phase(self) -> ProcPhase {
+        match self {
+            WaiterKind::Preview => ProcPhase::Preview,
+            WaiterKind::Sync => ProcPhase::Sync,
+        }
+    }
+}
+
+fn spawn_outcome_waiter(
+    streamed: StreamedChild,
+    account_id: String,
     sender: mpsc::Sender<BackendEvent>,
-) -> io::Result<SyncHandle> {
-    start_sync_with_options(account, binary, sender, false, true)
+    kind: WaiterKind,
+) -> SyncHandle {
+    let StreamedChild {
+        child,
+        stop_requested,
+        output,
+    } = streamed;
+    let wait_child = Arc::clone(&child);
+    let wait_stop_requested = Arc::clone(&stop_requested);
+
+    thread::spawn(move || {
+        let result = wait_for_child(&wait_child);
+        let requested_stop = wait_stop_requested.load(Ordering::SeqCst);
+        let combined = output
+            .lock()
+            .map(|output| output.clone())
+            .unwrap_or_default();
+        let outcome = match result {
+            Ok(success) => OperationOutcome {
+                success,
+                requested_stop,
+                auth_required: !success && is_auth_required(&combined),
+                error: (!success && !requested_stop).then(|| classify_onedrive_error(&combined)),
+                requires_confirmation: parse_confirmation(&combined),
+            },
+            Err(error) => OperationOutcome {
+                success: false,
+                requested_stop,
+                auth_required: false,
+                error: Some(BackendError::WaitFailed(kind.phase(), error.to_string())),
+                requires_confirmation: None,
+            },
+        };
+        let event = match kind {
+            WaiterKind::Preview => BackendEvent::PreviewFinished {
+                account_id,
+                outcome,
+            },
+            WaiterKind::Sync => BackendEvent::SyncFinished {
+                account_id,
+                outcome,
+            },
+        };
+        let _ = sender.send(event);
+    });
+
+    SyncHandle {
+        child,
+        stop_requested,
+    }
 }
 
 pub fn start_preview(
@@ -204,130 +281,41 @@ pub fn start_preview(
     binary: String,
     sender: mpsc::Sender<BackendEvent>,
 ) -> io::Result<SyncHandle> {
-    ensure_transfer_metrics_enabled(&account.config_dir)?;
-
-    let mut child = build_command(binary, &account, OneDriveCommandKind::Preview)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-
-    let output = attach_readers(&account.id, &mut child, &sender, OutputMode::Preview);
-    let child = Arc::new(Mutex::new(child));
-    let stop_requested = Arc::new(AtomicBool::new(false));
-    let wait_child = Arc::clone(&child);
-    let wait_stop_requested = Arc::clone(&stop_requested);
-
-    thread::spawn(move || {
-        let result = wait_for_child(&wait_child);
-        let requested_stop = wait_stop_requested.load(Ordering::SeqCst);
-        let combined = output
-            .lock()
-            .map(|output| output.clone())
-            .unwrap_or_default();
-        match result {
-            Ok(success) => {
-                let _ = sender.send(BackendEvent::PreviewFinished {
-                    account_id: account.id,
-                    outcome: OperationOutcome {
-                        success,
-                        requested_stop,
-                        auth_required: !success && is_auth_required(&combined),
-                        error: (!success && !requested_stop)
-                            .then(|| classify_onedrive_error(&combined)),
-                        requires_confirmation: parse_confirmation(&combined),
-                    },
-                });
-            }
-            Err(error) => {
-                let _ = sender.send(BackendEvent::PreviewFinished {
-                    account_id: account.id,
-                    outcome: OperationOutcome {
-                        success: false,
-                        requested_stop,
-                        auth_required: false,
-                        error: Some(BackendError::WaitFailed(
-                            ProcPhase::Preview,
-                            error.to_string(),
-                        )),
-                        requires_confirmation: None,
-                    },
-                });
-            }
-        }
-    });
-
-    Ok(SyncHandle {
-        child,
-        stop_requested,
-    })
+    let streamed = spawn_streamed_child(
+        &account,
+        binary,
+        OneDriveCommandKind::Preview,
+        OutputMode::Preview,
+        &sender,
+    )?;
+    Ok(spawn_outcome_waiter(
+        streamed,
+        account.id,
+        sender,
+        WaiterKind::Preview,
+    ))
 }
 
-fn start_sync_with_options(
+pub fn start_sync(
     account: Account,
     binary: String,
     sender: mpsc::Sender<BackendEvent>,
     force: bool,
     resync: bool,
 ) -> io::Result<SyncHandle> {
-    ensure_transfer_metrics_enabled(&account.config_dir)?;
-
-    let mut child = build_command(
-        binary,
+    let streamed = spawn_streamed_child(
         &account,
+        binary,
         OneDriveCommandKind::Sync { force, resync },
-    )
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()?;
-
-    let output = attach_readers(&account.id, &mut child, &sender, OutputMode::Live);
-    let child = Arc::new(Mutex::new(child));
-    let stop_requested = Arc::new(AtomicBool::new(false));
-    let wait_child = Arc::clone(&child);
-    let wait_stop_requested = Arc::clone(&stop_requested);
-
-    thread::spawn(move || {
-        let result = wait_for_child(&wait_child);
-        let requested_stop = wait_stop_requested.load(Ordering::SeqCst);
-        let combined = output
-            .lock()
-            .map(|output| output.clone())
-            .unwrap_or_default();
-
-        match result {
-            Ok(success) => {
-                let auth_required = !success && is_auth_required(&combined);
-                let _ = sender.send(BackendEvent::SyncFinished {
-                    account_id: account.id,
-                    outcome: OperationOutcome {
-                        success,
-                        requested_stop,
-                        auth_required,
-                        error: (!success && !requested_stop)
-                            .then(|| classify_onedrive_error(&combined)),
-                        requires_confirmation: parse_confirmation(&combined),
-                    },
-                });
-            }
-            Err(error) => {
-                let _ = sender.send(BackendEvent::SyncFinished {
-                    account_id: account.id,
-                    outcome: OperationOutcome {
-                        success: false,
-                        requested_stop,
-                        auth_required: false,
-                        error: Some(BackendError::WaitFailed(ProcPhase::Sync, error.to_string())),
-                        requires_confirmation: None,
-                    },
-                });
-            }
-        }
-    });
-
-    Ok(SyncHandle {
-        child,
-        stop_requested,
-    })
+        OutputMode::Live,
+        &sender,
+    )?;
+    Ok(spawn_outcome_waiter(
+        streamed,
+        account.id,
+        sender,
+        WaiterKind::Sync,
+    ))
 }
 
 pub fn start_monitor(
@@ -335,18 +323,21 @@ pub fn start_monitor(
     binary: String,
     sender: mpsc::Sender<BackendEvent>,
 ) -> io::Result<MonitorHandle> {
-    ensure_transfer_metrics_enabled(&account.config_dir)?;
-
-    let mut child = build_command(binary, &account, OneDriveCommandKind::Monitor)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-
-    let output = attach_readers(&account.id, &mut child, &sender, OutputMode::Live);
-    let child = Arc::new(Mutex::new(child));
-    let stop_requested = Arc::new(AtomicBool::new(false));
+    let streamed = spawn_streamed_child(
+        &account,
+        binary,
+        OneDriveCommandKind::Monitor,
+        OutputMode::Live,
+        &sender,
+    )?;
+    let StreamedChild {
+        child,
+        stop_requested,
+        output,
+    } = streamed;
     let wait_child = Arc::clone(&child);
     let wait_stop_requested = Arc::clone(&stop_requested);
+    let account_id = account.id;
 
     thread::spawn(move || {
         let success = loop {
@@ -355,7 +346,7 @@ pub fn start_monitor(
                     Ok(mut child) => child.try_wait(),
                     Err(_) => {
                         let _ = sender.send(BackendEvent::MonitorStopped {
-                            account_id: account.id,
+                            account_id: account_id.clone(),
                             outcome: OperationOutcome {
                                 success: false,
                                 requested_stop: wait_stop_requested.load(Ordering::SeqCst),
@@ -374,7 +365,7 @@ pub fn start_monitor(
                 Ok(None) => thread::sleep(Duration::from_millis(500)),
                 Err(error) => {
                     let _ = sender.send(BackendEvent::MonitorStopped {
-                        account_id: account.id,
+                        account_id: account_id.clone(),
                         outcome: OperationOutcome {
                             success: false,
                             requested_stop: wait_stop_requested.load(Ordering::SeqCst),
@@ -393,7 +384,7 @@ pub fn start_monitor(
             .map(|output| output.clone())
             .unwrap_or_default();
         let _ = sender.send(BackendEvent::MonitorStopped {
-            account_id: account.id,
+            account_id,
             outcome: OperationOutcome {
                 success,
                 requested_stop: wait_stop_requested.load(Ordering::SeqCst),
@@ -596,72 +587,7 @@ fn send_transfer_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(unix)]
-    fn fake_onedrive_binary(
-        output: &str,
-        exit_code: i32,
-    ) -> (std::path::PathBuf, std::path::PathBuf) {
-        use std::{
-            env,
-            os::unix::fs::PermissionsExt,
-            time::{SystemTime, UNIX_EPOCH},
-        };
-
-        let root = env::temp_dir().join(format!(
-            "onesync-fake-onedrive-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        let args_file = root.join("args");
-        let binary = root.join("fake-onedrive");
-        fs::write(
-            &binary,
-            format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprintf '%s' '{}'\nexit {}\n",
-                args_file.display(),
-                output.replace('\'', "'\\''"),
-                exit_code
-            ),
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&binary).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&binary, permissions).unwrap();
-        (binary, args_file)
-    }
-
-    #[cfg(unix)]
-    fn test_account() -> Account {
-        use crate::profile::AccountStatus;
-        use std::{
-            env,
-            time::{SystemTime, UNIX_EPOCH},
-        };
-
-        let root = env::temp_dir().join(format!(
-            "onesync-account-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let config_dir = root.join("profile");
-        fs::create_dir_all(&config_dir).unwrap();
-        fs::write(config_dir.join("config"), "sync_dir = \"~/OneDrive\"\n").unwrap();
-
-        Account {
-            id: "test-account".to_string(),
-            name: "Test Account".to_string(),
-            email: String::new(),
-            config_dir: config_dir.to_string_lossy().to_string(),
-            sync_dir: "~/OneDrive".to_string(),
-            status: AccountStatus::Authenticated,
-        }
-    }
+    use crate::adapter::test_support::{fake_onedrive_binary, temp_account};
 
     #[cfg(unix)]
     #[test]
@@ -703,7 +629,14 @@ mod tests {
             status: AccountStatus::Authenticated,
         };
         let (sender, receiver) = mpsc::channel();
-        let handle = start_sync(account, binary.to_string_lossy().to_string(), sender).unwrap();
+        let handle = start_sync(
+            account,
+            binary.to_string_lossy().to_string(),
+            sender,
+            false,
+            false,
+        )
+        .unwrap();
 
         stop_handle(&handle).unwrap();
         let event = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -762,8 +695,14 @@ mod tests {
             status: AccountStatus::Authenticated,
         };
         let (sender, receiver) = mpsc::channel();
-        let _handle =
-            start_forced_sync(account, binary.to_string_lossy().to_string(), sender).unwrap();
+        let _handle = start_sync(
+            account,
+            binary.to_string_lossy().to_string(),
+            sender,
+            true,
+            false,
+        )
+        .unwrap();
         let event = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(matches!(
             event,
@@ -828,7 +767,14 @@ mod tests {
             status: AccountStatus::Authenticated,
         };
         let (sender, receiver) = mpsc::channel();
-        let _handle = start_resync(account, binary.to_string_lossy().to_string(), sender).unwrap();
+        let _handle = start_sync(
+            account,
+            binary.to_string_lossy().to_string(),
+            sender,
+            false,
+            true,
+        )
+        .unwrap();
         let event = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(matches!(
             event,
@@ -985,7 +931,7 @@ mod tests {
     fn reconcile_preview_change_uses_single_directory_parent_scope() {
         let (binary, output_path) =
             fake_onedrive_binary("Sync with Microsoft OneDrive is complete\n", 0);
-        let account = test_account();
+        let account = temp_account("proc");
 
         reconcile_preview_change(&account, binary.to_string_lossy().to_string(), "docs/a.txt")
             .expect("reconcile should succeed");
@@ -1001,7 +947,7 @@ mod tests {
     #[test]
     fn display_reconcile_status_uses_single_directory_parent_scope() {
         let (binary, output_path) = fake_onedrive_binary("The directory is in sync\n", 0);
-        let account = test_account();
+        let account = temp_account("proc");
 
         display_reconcile_status(&account, binary.to_string_lossy().to_string(), "docs/a.txt")
             .expect("status should succeed");

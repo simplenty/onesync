@@ -35,6 +35,9 @@ pub(in crate::app) fn backend_error_message(error: &BackendError) -> String {
         }
         BackendError::DuplicateAccountName => "账户名称已存在".to_string(),
         BackendError::DuplicateSyncDir => "同步目录已存在".to_string(),
+        BackendError::ProfileCreateFailed(detail) => {
+            format!("写入账户文件失败: {detail}")
+        }
     }
 }
 
@@ -74,7 +77,7 @@ pub(in crate::app) fn change_kind_label(kind: ChangeKind) -> &'static str {
 
 pub(in crate::app) fn file_display_state(file: &FileChange) -> String {
     let action = change_kind_label(file.kind);
-    if file.is_failed() {
+    if file.failed {
         format!("{action}失败")
     } else if file.is_complete() {
         format!("{action}完成")
@@ -85,10 +88,6 @@ pub(in crate::app) fn file_display_state(file: &FileChange) -> String {
 
 // ── PreviewChange strings ──
 
-pub(in crate::app) fn preview_change_icon(change: &PreviewChange) -> &'static str {
-    change_kind_icon(change.kind)
-}
-
 pub(in crate::app) fn preview_intent_label(intent: PreviewIntent) -> &'static str {
     match intent {
         PreviewIntent::LocalChangeToRemote => "本地新增或修改",
@@ -96,7 +95,6 @@ pub(in crate::app) fn preview_intent_label(intent: PreviewIntent) -> &'static st
         PreviewIntent::LocalDeleteToRemote => "本地删除",
         PreviewIntent::RemoteDeleteToLocal => "远端删除",
         PreviewIntent::RemoteMetadataChange => "远端元数据变更",
-        PreviewIntent::AmbiguousRemoteToLocal => "远端存在/本地缺失语义不唯一",
     }
 }
 
@@ -112,9 +110,6 @@ pub(in crate::app) fn preview_intent_detail(intent: PreviewIntent) -> &'static s
         }
         PreviewIntent::RemoteMetadataChange => {
             "OneDrive 上的名称或位置变化会同步到本地，完成后会更新同步状态。"
-        }
-        PreviewIntent::AmbiguousRemoteToLocal => {
-            "这个项目需要你确认后再应用，避免把不确定的变化自动同步。"
         }
     }
 }
@@ -172,8 +167,6 @@ pub(in crate::app) fn operation_label(op: AccountOperation) -> &'static str {
         (OperationKind::OneTimeSync, OperationPhase::Running) => "一次同步",
         (OperationKind::Preview, OperationPhase::Running) => "预览",
         (OperationKind::Monitor, OperationPhase::Running) => "持续同步",
-        (OperationKind::ApplyPreviewChange, OperationPhase::Running) => "应用变更",
-        (OperationKind::Reconcile, OperationPhase::Running) => "更新同步状态",
         (_, OperationPhase::Stopping) => "停止",
     }
 }

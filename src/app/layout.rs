@@ -152,19 +152,15 @@ pub(in crate::app) fn build_content_widgets() -> (adw::ToolbarView, ContentWidge
         .icon_name("view-more-symbolic")
         .tooltip_text("账户操作")
         .build();
-    account_menu_button.set_popover(Some(&build_account_actions_popover(&[(
-        &edit_button,
-        "document-edit-symbolic",
-        "编辑账户",
-    ), (
-        &open_sync_dir_button,
-        "folder-open-symbolic",
-        "打开同步目录",
-    ), (
-        &resync_button,
-        "view-refresh-symbolic",
-        "重新扫描",
-    )])));
+    account_menu_button.set_popover(Some(&build_account_actions_popover(&[
+        (&edit_button, "document-edit-symbolic", "编辑账户"),
+        (
+            &open_sync_dir_button,
+            "folder-open-symbolic",
+            "打开同步目录",
+        ),
+        (&resync_button, "view-refresh-symbolic", "重新扫描"),
+    ])));
     actions.append(&account_menu_button);
 
     summary_box.append(&status_line);

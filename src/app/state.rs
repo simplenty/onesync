@@ -35,6 +35,8 @@ pub(in crate::app) struct AppState {
     pub(in crate::app) status_detail: gtk::Label,
     pub(in crate::app) transfers: TransferList,
     pub(in crate::app) account_menu_button: gtk::MenuButton,
+    // ponytail: future extension point per AGENT.md; handler re-added when settings UI lands
+    #[allow(dead_code)]
     pub(in crate::app) settings_button: gtk::Button,
     pub(in crate::app) mode_dropdown: gtk::DropDown,
     pub(in crate::app) selected_sync_mode: Cell<SyncMode>,
@@ -45,9 +47,11 @@ pub(in crate::app) struct AppState {
     pub(in crate::app) resync_button: gtk::Button,
     pub(in crate::app) edit_button: gtk::Button,
     pub(in crate::app) auth_button: gtk::Button,
-    pub(in crate::app) pending_confirmation: RefCell<Option<String>>,
+    // ponytail: was RefCell<Option<String>> account id, but only is_some() was read; bool suffices
+    pub(in crate::app) pending_confirmation: Cell<bool>,
     pub(in crate::app) tray_handle: RefCell<Option<AppTrayHandle>>,
-    pub(in crate::app) tray_snapshot: RefCell<Option<std::sync::Arc<std::sync::Mutex<TraySnapshot>>>>,
+    pub(in crate::app) tray_snapshot:
+        RefCell<Option<std::sync::Arc<std::sync::Mutex<TraySnapshot>>>>,
 }
 
 impl AppState {
@@ -65,6 +69,15 @@ impl AppState {
             .accounts()
             .get(self.selected_index.get())
             .map(|account| account.id.clone())
+    }
+
+    pub(in crate::app) fn account_by_id(&self, account_id: &str) -> Option<Account> {
+        self.store
+            .borrow()
+            .accounts()
+            .iter()
+            .find(|account| account.id == account_id)
+            .cloned()
     }
 }
 

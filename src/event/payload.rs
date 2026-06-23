@@ -9,8 +9,6 @@ pub enum ChangeKind {
     Rename,
 }
 
-impl ChangeKind {}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeDirection {
     LocalToRemote,
@@ -31,22 +29,15 @@ impl FileChange {
     pub fn is_complete(&self) -> bool {
         self.progress >= 1.0
     }
-
-    pub fn is_failed(&self) -> bool {
-        self.failed
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(dead_code)]
 pub enum PreviewState {
     Pending,
     Applying,
     Reconciling,
-    Applied,
     Failed,
     ReconcileFailed,
-    Dismissed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -60,17 +51,13 @@ pub enum PreviewAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(dead_code)]
 pub enum PreviewIntent {
     LocalChangeToRemote,
     RemoteChangeToLocal,
     LocalDeleteToRemote,
     RemoteDeleteToLocal,
     RemoteMetadataChange,
-    AmbiguousRemoteToLocal,
 }
-
-impl PreviewIntent {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreviewChange {
@@ -82,11 +69,4 @@ pub struct PreviewChange {
     pub apply: PreviewAction,
     pub intent: PreviewIntent,
     pub state: PreviewState,
-}
-
-impl PreviewChange {
-    #[must_use]
-    pub fn needs_confirmation(&self) -> bool {
-        matches!(self.intent, PreviewIntent::AmbiguousRemoteToLocal)
-    }
 }

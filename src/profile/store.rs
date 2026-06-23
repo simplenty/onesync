@@ -9,17 +9,37 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum AccountStoreError {
     DuplicateAccountName,
     DuplicateSyncDir,
+    Io(io::Error),
 }
 
-impl From<&AccountStoreError> for BackendError {
-    fn from(error: &AccountStoreError) -> Self {
+impl std::fmt::Display for AccountStoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DuplicateAccountName => f.write_str("账户名称已存在"),
+            Self::DuplicateSyncDir => f.write_str("同步目录已存在"),
+            Self::Io(error) => std::fmt::Display::fmt(error, f),
+        }
+    }
+}
+
+impl std::error::Error for AccountStoreError {}
+
+impl From<io::Error> for AccountStoreError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<AccountStoreError> for BackendError {
+    fn from(error: AccountStoreError) -> Self {
         match error {
             AccountStoreError::DuplicateAccountName => BackendError::DuplicateAccountName,
             AccountStoreError::DuplicateSyncDir => BackendError::DuplicateSyncDir,
+            AccountStoreError::Io(error) => BackendError::ProfileCreateFailed(error.to_string()),
         }
     }
 }
@@ -77,9 +97,13 @@ impl AccountStore {
     }
 
     /// Create a new account, append it, and persist. Returns the new account.
-    pub fn add(&mut self, name: &str, email: &str, sync_dir: &str) -> io::Result<Account> {
-        let account = create_account(&self.accounts, name, email, sync_dir)
-            .map_err(|e| io::Error::other(format!("{e:?}")))?;
+    pub fn add(
+        &mut self,
+        name: &str,
+        email: &str,
+        sync_dir: &str,
+    ) -> Result<Account, AccountStoreError> {
+        let account = create_account(&self.accounts, name, email, sync_dir)?;
         self.accounts.push(account.clone());
         self.flush()?;
         Ok(account)
@@ -103,7 +127,7 @@ impl AccountStore {
     ) -> io::Result<bool> {
         let mut changed = false;
         if let Some(account) = self.accounts.iter_mut().find(|a| a.id == account_id) {
-            let should_replace_name = should_replace_profile_name(&account.name, &account.email);
+            let should_replace_name = is_default_profile_name(&account.name, &account.email);
             if let Some(email) = email
                 && account.email != email
             {
@@ -134,7 +158,7 @@ impl AccountStore {
     }
 }
 
-fn should_replace_profile_name(current_name: &str, current_email: &str) -> bool {
+pub fn is_default_profile_name(current_name: &str, current_email: &str) -> bool {
     let name = current_name.trim();
     name.is_empty() || name == "OneDrive" || name.starts_with("OneDrive ") || name == current_email
 }
@@ -149,17 +173,15 @@ pub fn create_account(
     let name = if name.is_empty() { "OneDrive" } else { name };
     let id = format!("{}-{}", sanitize_id(name), unix_timestamp());
     let config_dir = profiles_root().join(&id);
-    fs::create_dir_all(&config_dir).expect("failed to create profile config directory");
+    fs::create_dir_all(&config_dir)?;
 
     let mut config = OneDriveConfig::default();
     config.apply_edit(&ConfigEdit {
         sync_dir: sync_dir.to_string(),
         ..ConfigEdit::default()
     });
-    config
-        .write_with_backup(config_dir.join("config"))
-        .expect("failed to write profile config");
-    fs::create_dir_all(expand_home(sync_dir)).expect("failed to create sync directory");
+    config.write_with_backup(config_dir.join("config"))?;
+    fs::create_dir_all(expand_home(sync_dir))?;
 
     Ok(Account {
         id,
@@ -268,7 +290,7 @@ mod tests {
         let error = create_account(&[existing], "Imported", "", "~/OneDrive")
             .expect_err("duplicate sync_dir should be rejected");
 
-        assert_eq!(error, AccountStoreError::DuplicateSyncDir);
+        assert!(matches!(error, AccountStoreError::DuplicateSyncDir));
     }
 
     #[test]
@@ -285,7 +307,7 @@ mod tests {
         let error = create_account(&[existing], "Existing", "", "~/OneDrive-B")
             .expect_err("duplicate name should be rejected");
 
-        assert_eq!(error, AccountStoreError::DuplicateAccountName);
+        assert!(matches!(error, AccountStoreError::DuplicateAccountName));
     }
 
     #[test]

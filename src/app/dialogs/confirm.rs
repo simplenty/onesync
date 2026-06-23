@@ -1,7 +1,4 @@
-use super::super::{
-    actions::{start_forced_one_time_sync_for_account, start_resync_for_account},
-    state::AppState,
-};
+use super::super::{actions::start_one_time_sync, state::AppState};
 use crate::profile::Account;
 use adw::prelude::*;
 use std::rc::Rc;
@@ -16,7 +13,7 @@ pub(in crate::app) fn show_warning_window(state: Rc<AppState>, title: &str, mess
         Some(&state.window),
         None::<&gtk::gio::Cancellable>,
         move |_| {
-            clear_state.pending_confirmation.borrow_mut().take();
+            clear_state.pending_confirmation.set(false);
         },
     );
 }
@@ -39,12 +36,9 @@ pub(in crate::app) fn show_big_delete_confirmation(state: Rc<AppState>, account:
         None::<&gtk::gio::Cancellable>,
         move |response| {
             if response == "force" {
-                start_forced_one_time_sync_for_account(
-                    Rc::clone(&force_state),
-                    force_account.clone(),
-                );
+                start_one_time_sync(Rc::clone(&force_state), force_account.clone(), true, false);
             }
-            force_state.pending_confirmation.borrow_mut().take();
+            force_state.pending_confirmation.set(false);
         },
     );
 }
@@ -67,9 +61,14 @@ pub(in crate::app) fn show_resync_confirmation(state: Rc<AppState>, account: Acc
         None::<&gtk::gio::Cancellable>,
         move |response| {
             if response == "resync" {
-                start_resync_for_account(Rc::clone(&resync_state), resync_account.clone());
+                start_one_time_sync(
+                    Rc::clone(&resync_state),
+                    resync_account.clone(),
+                    false,
+                    true,
+                );
             }
-            resync_state.pending_confirmation.borrow_mut().take();
+            resync_state.pending_confirmation.set(false);
         },
     );
 }

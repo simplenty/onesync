@@ -1,4 +1,4 @@
-use crate::utils::unix_timestamp;
+use crate::utils::{unix_timestamp, unquote};
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -12,16 +12,7 @@ pub struct ConfigEdit {
     pub sync_list: String,
     pub download_only: bool,
     pub upload_only: bool,
-    pub local_first: bool,
     pub no_remote_delete: bool,
-    pub dry_run: bool,
-    pub delay_inotify_processing: bool,
-    pub rate_limit: String,
-    pub threads: String,
-    pub connect_timeout: String,
-    pub data_timeout: String,
-    pub dns_timeout: String,
-    pub operation_timeout: String,
     pub monitor_interval: String,
     pub monitor_fullscan_frequency: String,
 }
@@ -39,9 +30,8 @@ impl ConfigEdit {
 #[derive(Debug, Clone)]
 enum ConfigLine {
     Blank,
-    Comment(String),
+    Verbatim(String),
     Pair { key: String, values: Vec<String> },
-    Raw(String),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -75,14 +65,14 @@ impl OneDriveConfig {
             if trimmed.is_empty() {
                 lines.push(ConfigLine::Blank);
             } else if trimmed.starts_with('#') {
-                lines.push(ConfigLine::Comment(raw.to_string()));
+                lines.push(ConfigLine::Verbatim(raw.to_string()));
             } else if let Some((key, value)) = trimmed.split_once('=') {
                 current_pair = Some((
                     key.trim().to_string(),
                     vec![unquote(value.trim()).to_string()],
                 ));
             } else {
-                lines.push(ConfigLine::Raw(raw.to_string()));
+                lines.push(ConfigLine::Verbatim(raw.to_string()));
             }
         }
 
@@ -105,16 +95,7 @@ impl OneDriveConfig {
         self.set_optional("sync_list", &edit.sync_list);
         self.set_bool("download_only", edit.download_only);
         self.set_bool("upload_only", edit.upload_only);
-        self.set_bool("local_first", edit.local_first);
         self.set_bool("no_remote_delete", edit.no_remote_delete);
-        self.set_bool("dry_run", edit.dry_run);
-        self.set_bool("delay_inotify_processing", edit.delay_inotify_processing);
-        self.set_optional("rate_limit", &edit.rate_limit);
-        self.set_optional("threads", &edit.threads);
-        self.set_optional("connect_timeout", &edit.connect_timeout);
-        self.set_optional("data_timeout", &edit.data_timeout);
-        self.set_optional("dns_timeout", &edit.dns_timeout);
-        self.set_optional("operation_timeout", &edit.operation_timeout);
         self.set_optional("monitor_interval", &edit.monitor_interval);
         self.set_optional(
             "monitor_fullscan_frequency",
@@ -131,16 +112,7 @@ impl OneDriveConfig {
             sync_list: self.single_value("sync_list").unwrap_or_default(),
             download_only: self.bool_value("download_only"),
             upload_only: self.bool_value("upload_only"),
-            local_first: self.bool_value("local_first"),
             no_remote_delete: self.bool_value("no_remote_delete"),
-            dry_run: self.bool_value("dry_run"),
-            delay_inotify_processing: self.bool_value("delay_inotify_processing"),
-            rate_limit: self.single_value("rate_limit").unwrap_or_default(),
-            threads: self.single_value("threads").unwrap_or_default(),
-            connect_timeout: self.single_value("connect_timeout").unwrap_or_default(),
-            data_timeout: self.single_value("data_timeout").unwrap_or_default(),
-            dns_timeout: self.single_value("dns_timeout").unwrap_or_default(),
-            operation_timeout: self.single_value("operation_timeout").unwrap_or_default(),
             monitor_interval: self.single_value("monitor_interval").unwrap_or_default(),
             monitor_fullscan_frequency: self
                 .single_value("monitor_fullscan_frequency")
@@ -246,7 +218,7 @@ impl std::fmt::Display for OneDriveConfig {
         for line in &self.lines {
             match line {
                 ConfigLine::Blank => writeln!(formatter)?,
-                ConfigLine::Comment(comment) | ConfigLine::Raw(comment) => {
+                ConfigLine::Verbatim(comment) => {
                     writeln!(formatter, "{comment}")?;
                 }
                 ConfigLine::Pair { key, values } => {
@@ -311,10 +283,6 @@ fn normalize_lines(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn unquote(value: &str) -> &str {
-    value.trim().trim_matches('"').trim_matches('\'').trim()
-}
-
 fn escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
@@ -355,11 +323,6 @@ mod tests {
             sync_dir: "~/OneDrive".to_string(),
             upload_only: true,
             no_remote_delete: true,
-            threads: "4".to_string(),
-            connect_timeout: "10".to_string(),
-            data_timeout: "60".to_string(),
-            dns_timeout: "15".to_string(),
-            operation_timeout: "3600".to_string(),
             monitor_interval: "300".to_string(),
             monitor_fullscan_frequency: "10".to_string(),
             ..ConfigEdit::default()
@@ -368,8 +331,13 @@ mod tests {
         let rendered = config.to_string();
 
         assert!(!rendered.contains("download_only"));
-        assert!(!rendered.contains("delay_inotify_processing"));
-        assert!(!rendered.contains("rate_limit"));
+        assert!(rendered.contains("delay_inotify_processing"));
+        assert!(rendered.contains("rate_limit"));
+        assert!(rendered.contains("threads = \"4\""));
+        assert!(rendered.contains("connect_timeout = \"10\""));
+        assert!(rendered.contains("data_timeout = \"60\""));
+        assert!(rendered.contains("dns_timeout = \"15\""));
+        assert!(rendered.contains("operation_timeout = \"3600\""));
         assert!(rendered.contains("upload_only = \"true\""));
         assert!(rendered.contains("no_remote_delete = \"true\""));
     }
