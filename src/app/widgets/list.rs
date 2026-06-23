@@ -422,19 +422,19 @@ fn build_preview_row(change: PreviewChange) -> (gtk::ListBoxRow, PreviewRow) {
     )
 }
 
-fn animate_progress(row: &TransferRow, target: f64) {
+fn animate(bar: &gtk::ProgressBar, counter: &Rc<Cell<u64>>, target: f64) {
     let target = target.clamp(0.0, 1.0);
-    let start = row.progress_bar.fraction();
-    let animation = row.progress_animation.get().wrapping_add(1);
-    row.progress_animation.set(animation);
+    let start = bar.fraction();
+    let animation = counter.get().wrapping_add(1);
+    counter.set(animation);
 
     if (target - start).abs() < 0.001 {
-        row.progress_bar.set_fraction(target);
+        bar.set_fraction(target);
         return;
     }
 
-    let progress_bar = row.progress_bar.clone();
-    let progress_animation = Rc::clone(&row.progress_animation);
+    let progress_bar = bar.clone();
+    let progress_animation = Rc::clone(counter);
     let started_at = Instant::now();
 
     gtk::glib::timeout_add_local(Duration::from_millis(16), move || {
@@ -457,37 +457,10 @@ fn animate_progress(row: &TransferRow, target: f64) {
     });
 }
 
+fn animate_progress(row: &TransferRow, target: f64) {
+    animate(&row.progress_bar, &row.progress_animation, target);
+}
+
 fn animate_preview_progress(row: &PreviewRow, target: f64) {
-    let target = target.clamp(0.0, 1.0);
-    let start = row.progress_bar.fraction();
-    let animation = row.progress_animation.get().wrapping_add(1);
-    row.progress_animation.set(animation);
-
-    if (target - start).abs() < 0.001 {
-        row.progress_bar.set_fraction(target);
-        return;
-    }
-
-    let progress_bar = row.progress_bar.clone();
-    let progress_animation = Rc::clone(&row.progress_animation);
-    let started_at = Instant::now();
-
-    gtk::glib::timeout_add_local(Duration::from_millis(16), move || {
-        if progress_animation.get() != animation {
-            return gtk::glib::ControlFlow::Break;
-        }
-
-        let elapsed = started_at.elapsed().as_secs_f64();
-        let duration = Duration::from_millis(PROGRESS_ANIMATION_MS).as_secs_f64();
-        let progress = (elapsed / duration).clamp(0.0, 1.0);
-        let eased = 1.0 - (1.0 - progress).powi(2);
-        progress_bar.set_fraction(start + ((target - start) * eased));
-
-        if progress >= 1.0 {
-            progress_bar.set_fraction(target);
-            gtk::glib::ControlFlow::Break
-        } else {
-            gtk::glib::ControlFlow::Continue
-        }
-    });
+    animate(&row.progress_bar, &row.progress_animation, target);
 }

@@ -75,7 +75,7 @@ pub fn load_store() -> io::Result<AccountStore> {
     serde_json::from_str(&content).map_err(io::Error::other)
 }
 
-pub fn save_accounts(accounts: &[Account]) -> io::Result<()> {
+fn save_accounts(accounts: &[Account]) -> io::Result<()> {
     let path = store_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;

@@ -141,7 +141,7 @@ OneSync 的 UI 应当像一个可靠的系统工具：克制、直接、可预�
 
 - 手动模式下的预览按钮启动 `onedrive --confdir <dir> --sync --dry-run --verbose`。
 - dry-run 输出中的传输行会解析为 `PreviewChange`，同一账号的预览变更保存在 `AppState.previews`。
-- `PreviewChange` 只保存行为必要字段：ID、路径、可选源路径、传输类型、方向、应用动作、意图和状态。
+- `PreviewChange` 只保存行为必要字段：ID、路径、可选源路径、传输类型、应用动作、意图和状态。
 - 预览行可单项应用或放弃；应用时 UI 将该变更加入 `applying_preview_changes` 并调用 Graph API 执行上传、下载、删除、移动或重命名。
 - Graph 应用完成后会触发局部 reconcile，用 onedrive CLI 更新同步状态；成功后从预览列表移除该变更，失败时保留行并展示可重试错误。
 

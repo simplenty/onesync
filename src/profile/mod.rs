@@ -16,5 +16,5 @@ pub use settings::{
 pub use store::{
     Account, AccountStatus, AccountStore, auth_response_path, auth_url_path, create_account,
     is_authenticated, is_default_profile_name, load_store, remove_confirmation_matches,
-    save_accounts, suggested_account_name, suggested_sync_dir,
+    suggested_account_name, suggested_sync_dir,
 };

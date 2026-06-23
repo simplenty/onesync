@@ -9,6 +9,5 @@ pub use backend::{BackendEvent, ClientCheck, ConfirmationKind};
 pub use error::{BackendError, ProcPhase};
 pub use outcome::OperationOutcome;
 pub use payload::{
-    ChangeDirection, ChangeKind, FileChange, PreviewAction, PreviewChange, PreviewIntent,
-    PreviewState,
+    ChangeKind, FileChange, PreviewAction, PreviewChange, PreviewIntent, PreviewState,
 };

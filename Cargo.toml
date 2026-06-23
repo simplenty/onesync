@@ -1,6 +1,6 @@
 [package]
 name = "OneSync"
-version = "0.0.6"
+version = "0.0.8"
 edition = "2024"
 description = "GTK/libadwaita desktop client for managing OneDrive sync via the onedrive CLI"
 license = "MIT"

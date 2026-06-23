@@ -440,7 +440,7 @@ fn percent_encode_segment(segment: &str) -> String {
 mod tests {
     use super::*;
     use crate::adapter::test_support::{fake_onedrive_binary, temp_account};
-    use crate::event::payload::{ChangeDirection, ChangeKind, PreviewIntent, PreviewState};
+    use crate::event::payload::{ChangeKind, PreviewIntent, PreviewState};
     use std::{io::Cursor, sync::mpsc};
 
     fn preview_change(path: &str, apply: PreviewAction) -> PreviewChange {
@@ -449,7 +449,6 @@ mod tests {
             path: path.to_string(),
             source_path: None,
             kind: ChangeKind::UploadNew,
-            direction: ChangeDirection::LocalToRemote,
             apply,
             intent: PreviewIntent::LocalChangeToRemote,
             state: PreviewState::Pending,

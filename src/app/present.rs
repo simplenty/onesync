@@ -62,7 +62,7 @@ pub(in crate::app) fn change_kind_icon(kind: ChangeKind) -> &'static str {
     }
 }
 
-pub(in crate::app) fn change_kind_label(kind: ChangeKind) -> &'static str {
+fn change_kind_label(kind: ChangeKind) -> &'static str {
     match kind {
         ChangeKind::Download => "下载",
         ChangeKind::UploadNew => "上传",

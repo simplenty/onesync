@@ -36,8 +36,6 @@ pub struct SyncHandle {
     stop_requested: Arc<AtomicBool>,
 }
 
-pub type MonitorHandle = SyncHandle;
-
 #[derive(Clone, Copy)]
 enum OutputMode {
     Live,
@@ -322,7 +320,7 @@ pub fn start_monitor(
     account: Account,
     binary: String,
     sender: mpsc::Sender<BackendEvent>,
-) -> io::Result<MonitorHandle> {
+) -> io::Result<SyncHandle> {
     let streamed = spawn_streamed_child(
         &account,
         binary,
@@ -395,7 +393,7 @@ pub fn start_monitor(
         });
     });
 
-    Ok(MonitorHandle {
+    Ok(SyncHandle {
         child,
         stop_requested,
     })
@@ -587,48 +585,28 @@ fn send_transfer_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapter::test_support::{fake_onedrive_binary, temp_account};
+    use crate::adapter::test_support::{fake_onedrive_binary, sync_test_fixture, temp_account};
+
+    #[cfg(unix)]
+    fn fixture_account(id: &str, name: &str, config_dir: impl AsRef<std::path::Path>) -> Account {
+        use crate::profile::AccountStatus;
+        Account {
+            id: id.to_string(),
+            name: name.to_string(),
+            email: String::new(),
+            config_dir: config_dir.as_ref().to_string_lossy().to_string(),
+            sync_dir: "~/OneDrive".to_string(),
+            status: AccountStatus::Authenticated,
+        }
+    }
 
     #[cfg(unix)]
     #[test]
     fn sync_handle_can_stop_running_sync() {
-        use crate::profile::AccountStatus;
-        use std::{
-            env,
-            os::unix::fs::PermissionsExt,
-            sync::mpsc,
-            time::{SystemTime, UNIX_EPOCH},
-        };
-
-        let root = env::temp_dir().join(format!(
-            "onesync-stop-test-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let config_dir = root.join("profile");
-        fs::create_dir_all(&config_dir).unwrap();
-        fs::write(config_dir.join("config"), "sync_dir = \"~/OneDrive\"\n").unwrap();
-        let binary = root.join("fake-onedrive");
-        fs::write(
-            &binary,
-            "#!/bin/sh\ntrap 'exit 0' TERM\nwhile true; do sleep 1; done\n",
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&binary).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&binary, permissions).unwrap();
-
-        let account = Account {
-            id: "sync-stop".to_string(),
-            name: "Sync Stop".to_string(),
-            email: String::new(),
-            config_dir: config_dir.to_string_lossy().to_string(),
-            sync_dir: "~/OneDrive".to_string(),
-            status: AccountStatus::Authenticated,
-        };
-        let (sender, receiver) = mpsc::channel();
+        let (binary, config_dir, root) =
+            sync_test_fixture("stop", "trap 'exit 0' TERM\nwhile true; do sleep 1; done");
+        let account = fixture_account("sync-stop", "Sync Stop", config_dir);
+        let (sender, receiver) = std::sync::mpsc::channel();
         let handle = start_sync(
             account,
             binary.to_string_lossy().to_string(),
@@ -647,54 +625,15 @@ mod tests {
             }
             other => panic!("expected SyncFinished, got {other:?}"),
         }
-
         fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
     fn forced_sync_passes_force_flag_to_onedrive() {
-        use crate::profile::AccountStatus;
-        use std::{
-            env,
-            os::unix::fs::PermissionsExt,
-            sync::mpsc,
-            time::{SystemTime, UNIX_EPOCH},
-        };
-
-        let root = env::temp_dir().join(format!(
-            "onesync-force-test-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let config_dir = root.join("profile");
-        fs::create_dir_all(&config_dir).unwrap();
-        fs::write(config_dir.join("config"), "sync_dir = \"~/OneDrive\"\n").unwrap();
-        let args_file = root.join("args");
-        let binary = root.join("fake-onedrive");
-        fs::write(
-            &binary,
-            format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n",
-                args_file.display()
-            ),
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&binary).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&binary, permissions).unwrap();
-
-        let account = Account {
-            id: "force-sync".to_string(),
-            name: "Force Sync".to_string(),
-            email: String::new(),
-            config_dir: config_dir.to_string_lossy().to_string(),
-            sync_dir: "~/OneDrive".to_string(),
-            status: AccountStatus::Authenticated,
-        };
-        let (sender, receiver) = mpsc::channel();
+        let (binary, config_dir, root) = sync_test_fixture("force", "printf '%s\\n' \"$@\" > args");
+        let account = fixture_account("force-sync", "Force Sync", config_dir);
+        let (sender, receiver) = std::sync::mpsc::channel();
         let _handle = start_sync(
             account,
             binary.to_string_lossy().to_string(),
@@ -716,57 +655,19 @@ mod tests {
             }
         ));
 
-        let args = fs::read_to_string(args_file).unwrap();
+        let args = fs::read_to_string(root.join("args")).unwrap();
         assert!(args.lines().any(|arg| arg == "--force"));
         assert!(!args.lines().any(|arg| arg == "--resync-auth"));
-
         fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
     fn resync_passes_resync_flag_to_onedrive() {
-        use crate::profile::AccountStatus;
-        use std::{
-            env,
-            os::unix::fs::PermissionsExt,
-            sync::mpsc,
-            time::{SystemTime, UNIX_EPOCH},
-        };
-
-        let root = env::temp_dir().join(format!(
-            "onesync-resync-test-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let config_dir = root.join("profile");
-        fs::create_dir_all(&config_dir).unwrap();
-        fs::write(config_dir.join("config"), "sync_dir = \"~/OneDrive\"\n").unwrap();
-        let args_file = root.join("args");
-        let binary = root.join("fake-onedrive");
-        fs::write(
-            &binary,
-            format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n",
-                args_file.display()
-            ),
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&binary).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&binary, permissions).unwrap();
-
-        let account = Account {
-            id: "resync".to_string(),
-            name: "Resync".to_string(),
-            email: String::new(),
-            config_dir: config_dir.to_string_lossy().to_string(),
-            sync_dir: "~/OneDrive".to_string(),
-            status: AccountStatus::Authenticated,
-        };
-        let (sender, receiver) = mpsc::channel();
+        let (binary, config_dir, root) =
+            sync_test_fixture("resync", "printf '%s\\n' \"$@\" > args");
+        let account = fixture_account("resync", "Resync", config_dir);
+        let (sender, receiver) = std::sync::mpsc::channel();
         let _handle = start_sync(
             account,
             binary.to_string_lossy().to_string(),
@@ -788,57 +689,21 @@ mod tests {
             }
         ));
 
-        let args = fs::read_to_string(args_file).unwrap();
+        let args = fs::read_to_string(root.join("args")).unwrap();
         assert!(args.lines().any(|arg| arg == "--resync"));
         assert!(args.lines().any(|arg| arg == "--resync-auth"));
-
         fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
     fn preview_sync_passes_dry_run_flag_to_onedrive() {
-        use crate::profile::AccountStatus;
-        use std::{
-            env,
-            os::unix::fs::PermissionsExt,
-            sync::mpsc,
-            time::{SystemTime, UNIX_EPOCH},
-        };
-
-        let root = env::temp_dir().join(format!(
-            "onesync-preview-test-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let config_dir = root.join("profile");
-        fs::create_dir_all(&config_dir).unwrap();
-        fs::write(config_dir.join("config"), "sync_dir = \"~/OneDrive\"\n").unwrap();
-        let args_file = root.join("args");
-        let binary = root.join("fake-onedrive");
-        fs::write(
-            &binary,
-            format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprintf '%s\\n' 'Uploading new file: ./docs/a.txt ... done'\n",
-                args_file.display()
-            ),
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&binary).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&binary, permissions).unwrap();
-
-        let account = Account {
-            id: "preview-sync".to_string(),
-            name: "Preview Sync".to_string(),
-            email: String::new(),
-            config_dir: config_dir.to_string_lossy().to_string(),
-            sync_dir: "~/OneDrive".to_string(),
-            status: AccountStatus::Authenticated,
-        };
-        let (sender, receiver) = mpsc::channel();
+        let (binary, config_dir, root) = sync_test_fixture(
+            "preview",
+            "printf '%s\\n' \"$@\" > args\nprintf '%s\\n' 'Uploading new file: ./docs/a.txt ... done'",
+        );
+        let account = fixture_account("preview-sync", "Preview Sync", config_dir);
+        let (sender, receiver) = std::sync::mpsc::channel();
         let _handle = start_preview(account, binary.to_string_lossy().to_string(), sender).unwrap();
 
         let events = [
@@ -862,55 +727,23 @@ mod tests {
             }
         )));
 
-        let args = fs::read_to_string(args_file).unwrap();
+        let args = fs::read_to_string(root.join("args")).unwrap();
         assert!(args.lines().any(|arg| arg == "--sync"));
         assert!(args.lines().any(|arg| arg == "--verbose"));
         assert!(args.lines().any(|arg| arg == "--local-first"));
         assert!(args.lines().any(|arg| arg == "--dry-run"));
-
         fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
     fn preview_handle_reports_requested_stop() {
-        use crate::profile::AccountStatus;
-        use std::{
-            env,
-            os::unix::fs::PermissionsExt,
-            sync::mpsc,
-            time::{SystemTime, UNIX_EPOCH},
-        };
-
-        let root = env::temp_dir().join(format!(
-            "onesync-preview-stop-test-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let config_dir = root.join("profile");
-        fs::create_dir_all(&config_dir).unwrap();
-        fs::write(config_dir.join("config"), "sync_dir = \"~/OneDrive\"\n").unwrap();
-        let binary = root.join("fake-onedrive");
-        fs::write(
-            &binary,
-            "#!/bin/sh\ntrap 'exit 0' TERM\nwhile true; do sleep 1; done\n",
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&binary).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&binary, permissions).unwrap();
-
-        let account = Account {
-            id: "preview-stop".to_string(),
-            name: "Preview Stop".to_string(),
-            email: String::new(),
-            config_dir: config_dir.to_string_lossy().to_string(),
-            sync_dir: "~/OneDrive".to_string(),
-            status: AccountStatus::Authenticated,
-        };
-        let (sender, receiver) = mpsc::channel();
+        let (binary, config_dir, root) = sync_test_fixture(
+            "preview-stop",
+            "trap 'exit 0' TERM\nwhile true; do sleep 1; done",
+        );
+        let account = fixture_account("preview-stop", "Preview Stop", config_dir);
+        let (sender, receiver) = std::sync::mpsc::channel();
         let handle = start_preview(account, binary.to_string_lossy().to_string(), sender).unwrap();
 
         stop_handle(&handle).unwrap();
@@ -922,7 +755,6 @@ mod tests {
             }
             other => panic!("expected PreviewFinished, got {other:?}"),
         }
-
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -9,20 +9,12 @@ pub enum ChangeKind {
     Rename,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ChangeDirection {
-    LocalToRemote,
-    RemoteToLocal,
-    RemoteMetadata,
-}
-
 #[derive(Debug, Clone)]
 pub struct FileChange {
     pub name: String,
     pub progress: f64,
     pub failed: bool,
     pub kind: ChangeKind,
-    pub direction: ChangeDirection,
 }
 
 impl FileChange {
@@ -65,7 +57,6 @@ pub struct PreviewChange {
     pub path: String,
     pub source_path: Option<String>,
     pub kind: ChangeKind,
-    pub direction: ChangeDirection,
     pub apply: PreviewAction,
     pub intent: PreviewIntent,
     pub state: PreviewState,

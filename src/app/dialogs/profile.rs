@@ -473,12 +473,7 @@ pub(in crate::app) fn show_edit_profile_dialog(state: Rc<AppState>, account: Acc
             if !dirty.get() {
                 dirty.set(true);
                 save_button.set_sensitive(true);
-                if dirty.get() {
-                    save_button.add_css_class("suggested-action");
-                    save_button.set_sensitive(true);
-                } else {
-                    save_button.set_sensitive(false);
-                }
+                save_button.add_css_class("suggested-action");
             }
         }
     });

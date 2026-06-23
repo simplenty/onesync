@@ -1,7 +1,13 @@
 use crate::event::payload::{
-    ChangeDirection, ChangeKind, FileChange, PreviewAction, PreviewChange, PreviewIntent,
-    PreviewState,
+    ChangeKind, FileChange, PreviewAction, PreviewChange, PreviewIntent, PreviewState,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ChangeDirection {
+    LocalToRemote,
+    RemoteToLocal,
+    RemoteMetadata,
+}
 
 #[derive(Clone, Copy)]
 struct ChangePattern {
@@ -143,6 +149,31 @@ const CHANGE_PATTERNS: &[ChangePattern] = &[
 ];
 
 pub fn parse_file_change_line(line: &str) -> Option<FileChange> {
+    parse_file(line).map(|(_, file)| file)
+}
+
+pub fn parse_preview_change_line(line: &str) -> Option<PreviewChange> {
+    let (pattern, file) = parse_file(line)?;
+    let (source_path, path) = split_source_target(&file.name)
+        .map_or((None, file.name.clone()), |(source, target)| {
+            (Some(source.to_string()), target.to_string())
+        });
+    let apply = preview_apply_for(file.kind, pattern.direction);
+    let intent = preview_intent_for(file.kind, pattern.direction, apply);
+    let id = preview_id(file.kind, &path, source_path.as_deref());
+
+    Some(PreviewChange {
+        id,
+        path,
+        source_path,
+        kind: file.kind,
+        apply,
+        intent,
+        state: PreviewState::Pending,
+    })
+}
+
+fn parse_file(line: &str) -> Option<(&'static ChangePattern, FileChange)> {
     let trimmed = line.trim();
     let (pattern, mut path) = CHANGE_PATTERNS
         .iter()
@@ -166,35 +197,15 @@ pub fn parse_file_change_line(line: &str) -> Option<FileChange> {
         0.0
     });
 
-    Some(FileChange {
-        name: path.to_string(),
-        progress,
-        failed,
-        kind: pattern.kind,
-        direction: pattern.direction,
-    })
-}
-
-pub fn parse_preview_change_line(line: &str) -> Option<PreviewChange> {
-    let file = parse_file_change_line(line)?;
-    let (source_path, path) = split_source_target(&file.name)
-        .map_or((None, file.name.clone()), |(source, target)| {
-            (Some(source.to_string()), target.to_string())
-        });
-    let apply = preview_apply_for(file.kind, file.direction);
-    let intent = preview_intent_for(file.kind, file.direction, apply);
-    let id = preview_id(file.kind, &path, source_path.as_deref());
-
-    Some(PreviewChange {
-        id,
-        path,
-        source_path,
-        kind: file.kind,
-        direction: file.direction,
-        apply,
-        intent,
-        state: PreviewState::Pending,
-    })
+    Some((
+        pattern,
+        FileChange {
+            name: path.to_string(),
+            progress,
+            failed,
+            kind: pattern.kind,
+        },
+    ))
 }
 
 fn preview_apply_for(kind: ChangeKind, direction: ChangeDirection) -> PreviewAction {
@@ -262,8 +273,8 @@ fn split_source_target(path: &str) -> Option<(&str, &str)> {
 
 fn match_transfer_prefix<'a>(
     line: &'a str,
-    pattern: &'a ChangePattern,
-) -> Option<(&'a ChangePattern, &'a str)> {
+    pattern: &'static ChangePattern,
+) -> Option<(&'static ChangePattern, &'a str)> {
     let rest = line.strip_prefix(pattern.prefix)?;
     if rest.is_empty() || rest.starts_with(':') || rest.starts_with(char::is_whitespace) {
         Some((pattern, rest.trim_start_matches(':').trim()))
@@ -354,7 +365,6 @@ mod tests {
 
         assert_eq!(file.name, "./docs/a.txt");
         assert_eq!(file.kind, ChangeKind::UploadNew);
-        assert_eq!(file.direction, ChangeDirection::LocalToRemote);
         assert_progress(file.progress, 1.0);
     }
 
@@ -363,7 +373,6 @@ mod tests {
         let file = parsed("Deleting item from Microsoft OneDrive: docs/a.txt");
 
         assert_eq!(file.kind, ChangeKind::DeleteRemote);
-        assert_eq!(file.direction, ChangeDirection::LocalToRemote);
     }
 
     #[test]
@@ -371,7 +380,6 @@ mod tests {
         let file = parsed("Deleting local file: docs/a.txt");
 
         assert_eq!(file.kind, ChangeKind::DeleteLocal);
-        assert_eq!(file.direction, ChangeDirection::RemoteToLocal);
     }
 
     #[test]
